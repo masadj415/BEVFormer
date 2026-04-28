@@ -82,13 +82,6 @@ def nuscenes_data_prep(root_path,
             out_dir, f'{info_prefix}_infos_temporal_train.pkl')
         info_val_path = osp.join(
             out_dir, f'{info_prefix}_infos_temporal_val.pkl')
-        nuscenes_converter.export_2d_annotation(
-            root_path, info_train_path, version=version)
-        nuscenes_converter.export_2d_annotation(
-            root_path, info_val_path, version=version)
-        # create_groundtruth_database(dataset_name, root_path, info_prefix,
-        #                             f'{out_dir}/{info_prefix}_infos_train.pkl')
-
 
 def lyft_data_prep(root_path, info_prefix, version, max_sweeps=10):
     """Prepare data related to Lyft dataset.
@@ -245,15 +238,15 @@ if __name__ == '__main__':
             dataset_name='NuScenesDataset',
             out_dir=args.out_dir,
             max_sweeps=args.max_sweeps)
-        test_version = f'{args.version}-test'
-        nuscenes_data_prep(
-            root_path=args.root_path,
-            can_bus_root_path=args.canbus,
-            info_prefix=args.extra_tag,
-            version=test_version,
-            dataset_name='NuScenesDataset',
-            out_dir=args.out_dir,
-            max_sweeps=args.max_sweeps)
+        # test_version = f'{args.version}-test'
+        # nuscenes_data_prep(
+        #     root_path=args.root_path,
+        #     can_bus_root_path=args.canbus,
+        #     info_prefix=args.extra_tag,
+        #     version=test_version,
+        #     dataset_name='NuScenesDataset',
+        #     out_dir=args.out_dir,
+            # max_sweeps=args.max_sweeps)
     elif args.dataset == 'nuscenes' and args.version == 'v1.0-mini':
         train_version = f'{args.version}'
         nuscenes_data_prep(
