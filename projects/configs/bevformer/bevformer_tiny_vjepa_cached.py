@@ -21,8 +21,6 @@ point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 voxel_size = [0.2, 0.2, 8]
 
 
-
-
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 
@@ -43,8 +41,8 @@ _dim_ = 256
 _pos_dim_ = _dim_//2
 _ffn_dim_ = _dim_*2
 _num_levels_ = 1
-bev_h_ = 50
-bev_w_ = 50
+bev_h_ = 200
+bev_w_ = 200
 queue_length = 1 # each sequence contains `queue_length` frames.
 
 model = dict(
@@ -77,7 +75,7 @@ model = dict(
             embed_dims=_dim_,
             encoder=dict(
                 type='BEVFormerEncoder',
-                num_layers=3,
+                num_layers=6,
                 pc_range=point_cloud_range,
                 num_points_in_pillar=4,
                 return_intermediate=False,
@@ -242,12 +240,18 @@ optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
     policy='CosineAnnealing',
+    by_epoch=False,
     warmup='linear',
+    warmup_by_epoch=False,
     warmup_iters=500,
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3)
-total_epochs = 24
-evaluation = dict(interval=1, pipeline=test_pipeline)
+total_epochs = 30
+evaluation = dict(
+    interval=1,
+    metric='bbox',
+    pipeline=test_pipeline
+)
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 
@@ -259,7 +263,7 @@ log_config = dict(
             type='WandbLoggerHook',
             init_kwargs=dict(
                 project='bevformer-vjepa',
-                name='tiny_vjepa_cached_last_debug',
+                name='vjepa_cached_bev200_itercosine_eval',
                 dir='/scratch/izar/mduric/wandb',
                 config=dict(
                     model='BEVFormerVJepa',
@@ -273,4 +277,4 @@ log_config = dict(
         )
     ])
 
-checkpoint_config = dict(interval=1)
+checkpoint_config = dict(interval=4)

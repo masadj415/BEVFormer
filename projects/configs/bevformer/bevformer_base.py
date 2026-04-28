@@ -160,7 +160,7 @@ model = dict(
             pc_range=point_cloud_range))))
 
 dataset_type = 'CustomNuScenesDataset'
-data_root = 'data/nuscenes/'
+data_root = '/scratch/izar/mduric/nuscenes_trainval/'
 file_client_args = dict(backend='disk')
 
 
@@ -238,20 +238,39 @@ optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
     policy='CosineAnnealing',
+    by_epoch=False,
     warmup='linear',
+    warmup_by_epoch=False,
     warmup_iters=500,
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3)
-total_epochs = 24
-evaluation = dict(interval=1, pipeline=test_pipeline)
-
+total_epochs = 30
+evaluation = dict(
+    interval=1,
+    metric='bbox',
+    pipeline=test_pipeline
+)
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
-load_from = 'ckpts/r101_dcn_fcos3d_pretrain.pth'
+load_from = None
 log_config = dict(
-    interval=50,
+    interval=10,
     hooks=[
         dict(type='TextLoggerHook'),
-        dict(type='TensorboardLoggerHook')
+        dict(
+            type='WandbLoggerHook',
+            init_kwargs=dict(
+                project='bevformer-vjepa',
+                name='bevformer_base_bev200_baseline',
+                dir='/scratch/izar/mduric/wandb',
+                config=dict(
+                    model='BEVFormer-base',
+                    backbone='R101-DCN',
+                    bev_h=bev_h_,
+                    bev_w=bev_w_,
+                    queue_length=queue_length,
+                    num_levels=_num_levels_,
+                )
+            )
+        )
     ])
-
-checkpoint_config = dict(interval=1)
+checkpoint_config = dict(interval=4)
