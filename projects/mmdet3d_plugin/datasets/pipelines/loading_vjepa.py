@@ -18,9 +18,13 @@ class LoadVJepaFeaturesFromH5:
         vitb/<sample_token> -> [6, 672, 768]
     """
 
-    def __init__(self, h5_path, group="vitb"):
+    def __init__(self, h5_path, group="vitb", img_w=384, img_h=224, orig_w=1600, orig_h=900):
         self.h5_path = h5_path
         self.group = group
+        self.img_w = img_w
+        self.img_h = img_h
+        self.orig_w = orig_w
+        self.orig_h = orig_h
         self._h5 = None
 
     def _get_h5(self):
@@ -58,6 +62,29 @@ class LoadVJepaFeaturesFromH5:
 
         perm = [CAMERAS.index(cam) for cam in meta_order]
         return feat[perm]
+    def _scale_geometry_to_vjepa_resolution(self, results):
+        sx = self.img_w / self.orig_w
+        sy = self.img_h / self.orig_h
+
+        if "lidar2img" in results:
+            scaled_lidar2img = []
+            for mat in results["lidar2img"]:
+                mat = np.array(mat, dtype=np.float32).copy()
+                mat[0, :] *= sx
+                mat[1, :] *= sy
+                scaled_lidar2img.append(mat)
+            results["lidar2img"] = scaled_lidar2img
+
+        if "cam_intrinsic" in results:
+            scaled_intrinsics = []
+            for mat in results["cam_intrinsic"]:
+                mat = np.array(mat, dtype=np.float32).copy()
+                mat[0, :] *= sx
+                mat[1, :] *= sy
+                scaled_intrinsics.append(mat)
+            results["cam_intrinsic"] = scaled_intrinsics
+
+        return results
 
     def __call__(self, results):
         token = self._get_sample_token(results)
@@ -76,13 +103,15 @@ class LoadVJepaFeaturesFromH5:
 
         feat = self._reorder_to_metadata_camera_order(feat, results)
 
+        results = self._scale_geometry_to_vjepa_resolution(results)
+
         # Important: BEVFormer receives this as img=...
         results["img"] = feat
 
         # Keep original nuScenes geometry metadata.
         num_cams = feat.shape[0]
-        results["img_shape"] = [(900, 1600, 3) for _ in range(num_cams)]
-        results["ori_shape"] = [(900, 1600, 3) for _ in range(num_cams)]
-        results["pad_shape"] = [(900, 1600, 3) for _ in range(num_cams)]
+        results["img_shape"] = [(self.img_h, self.img_w, 3) for _ in range(num_cams)]
+        results["ori_shape"] = [(self.img_h, self.img_w, 3) for _ in range(num_cams)]
+        results["pad_shape"] = [(self.img_h, self.img_w, 3) for _ in range(num_cams)]
 
         return results

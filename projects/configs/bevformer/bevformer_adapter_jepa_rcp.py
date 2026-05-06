@@ -110,6 +110,7 @@ model = dict(
                                 type='MSDeformableAttention3D',
                                 embed_dims=_dim_,
                                 num_points=8,
+                                im2col_step=24,
                                 num_levels=_num_levels_
                             ),
                             embed_dims=_dim_,
@@ -141,6 +142,7 @@ model = dict(
                         dict(
                             type='CustomMSDeformableAttention',
                             embed_dims=_dim_,
+                            im2col_step=24,
                             num_levels=1
                         ),
                     ],
@@ -206,14 +208,18 @@ model = dict(
 )
 
 dataset_type = 'CustomNuScenesDataset'
-data_root = '/scratch/izar/mduric/nuscenes_trainval/'
+data_root = '/mnt/vilab/scratch/masha/nuscenes_trainval/'
 file_client_args = dict(backend='disk')
 
 train_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
         h5_path='/mnt/vilab/scratch/masha/vjepa_cache/features_vitb_224x384_T4_final.h5',
-        group='vitb'
+        group='vitb',
+        img_w=384,
+        img_h=224,
+        orig_w=1600,
+        orig_h=900
     ),
     dict(
         type='LoadAnnotations3D',
@@ -242,12 +248,16 @@ train_pipeline = [
 test_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/scratch/izar/mduric/vjepa_cache/features_vitb_224x384_T4_final.h5',
-        group='vitb'
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/features_vitb_224x384_T4_final.h5',
+        group='vitb',
+        img_w=384,
+        img_h=224,
+        orig_w=1600,
+        orig_h=900
     ),
     dict(
         type='MultiScaleFlipAug3D',
-        img_scale=(1600, 900),
+        img_scale=(384, 224),
         pts_scale_ratio=1,
         flip=False,
         transforms=[
@@ -265,8 +275,8 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=2,
-    workers_per_gpu=8,
+    samples_per_gpu=12,
+    workers_per_gpu=0,
 
     train=dict(
         type=dataset_type,
@@ -346,19 +356,20 @@ log_config = dict(
     hooks=[
         dict(type='TextLoggerHook'),
         dict(
-            type='WandbLoggerHook',
+            type='FilteredWandbLoggerHook',
+            keep_train=True,
             init_kwargs=dict(
                 project='bevformer-vjepa',
-                name='vjepa_bev200_enc6_gated_adapter512_bs2_w8',
-                dir='/scratch/izar/mduric/wandb',
+                name='vjepa_bev200_enc6_gated_adapter512_bs12_w0',
+                dir='/mnt/vilab/scratch/masha/wandb',
                 config=dict(
                     model='BEVFormerVJepa',
                     features='V-JEPA cached',
                     temporal_reduce='gated',
                     adapter='768-512-512-256 conv3x3',
                     gate_hidden_dim=256,
-                    samples_per_gpu=2,
-                    workers_per_gpu=8,
+                    samples_per_gpu=12,
+                    workers_per_gpu=0,
                     queue_length=queue_length,
                     bev_h=bev_h_,
                     bev_w=bev_w_,
@@ -368,7 +379,8 @@ log_config = dict(
                 )
             )
         )
-    ])
+    ]
+)
 
 checkpoint_config = dict(
     interval=4
