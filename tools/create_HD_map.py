@@ -64,7 +64,8 @@ def obtain_map_info_v12(nusc_maps, location, l2e_r_mat, l2e_t, e2g_r_mat, e2g_t,
     return {'map_mask': save_path}
 
 
-def add_map_to_pkl(pkl_path, nusc_maps, location, map_out_dir, out_pkl_path, split_name):
+def add_map_to_pkl(pkl_path, nusc_maps, location, map_out_dir, out_pkl_path, split_name,
+                   canvas_size=(200, 200)):
     """Load an existing BEVFormer pkl, add 'maps' to every sample, re-save.
 
     Skips samples whose .npz already exists so the job is safely resumable.
@@ -109,6 +110,7 @@ def add_map_to_pkl(pkl_path, nusc_maps, location, map_out_dir, out_pkl_path, spl
                 nusc_maps, location,
                 l2e_r_mat, l2e_t, e2g_r_mat, e2g_t,
                 lidar_path, map_out_dir,
+                canvas_size=canvas_size,
             )
         except Exception as e:
             errors += 1
@@ -158,6 +160,8 @@ def main():
     parser.add_argument('--location', type=str, default='boston-seaport',
                         choices=MAPS,
                         help='Map location to use for all samples (default: boston-seaport)')
+    parser.add_argument('--canvas-size', type=int, default=200,
+                        help='BEV grid size: 200 for base, 150 for small, 50 for tiny (default: 200)')
     args = parser.parse_args()
 
     if args.train_pkl is None and args.val_pkl is None:
@@ -173,21 +177,28 @@ def main():
         nusc_maps[loc] = NuScenesMap(dataroot=args.root_path, map_name=loc)
         print(f'  loaded: {loc}')
 
-    print(f'\nLayers to extract ({len(SEG_LAYERS)}):')
+    canvas_size = (args.canvas_size, args.canvas_size)
+    res = 102.4 / args.canvas_size
+    print(f'\nCanvas size : {args.canvas_size}x{args.canvas_size} px  ({res:.4f} m/px)')
+    print(f'Patch size  : 102.4m x 102.4m  (matches BEVFormer point_cloud_range ±51.2m)')
+    print(f'Layers to extract ({len(SEG_LAYERS)}):')
     for i, name in enumerate(SEG_LAYERS):
         print(f'  [{i}] {name}')
 
     t0 = time.time()
+    suffix = f'_with_map_{args.canvas_size}.pkl'
 
     if args.train_pkl:
-        out_name = osp.basename(args.train_pkl).replace('.pkl', '_with_map.pkl')
+        out_name = osp.basename(args.train_pkl).replace('.pkl', suffix)
         add_map_to_pkl(args.train_pkl, nusc_maps, args.location, args.map_out_dir,
-                       osp.join(args.out_dir, out_name), split_name='TRAIN')
+                       osp.join(args.out_dir, out_name), split_name='TRAIN',
+                       canvas_size=canvas_size)
 
     if args.val_pkl:
-        out_name = osp.basename(args.val_pkl).replace('.pkl', '_with_map.pkl')
+        out_name = osp.basename(args.val_pkl).replace('.pkl', suffix)
         add_map_to_pkl(args.val_pkl, nusc_maps, args.location, args.map_out_dir,
-                       osp.join(args.out_dir, out_name), split_name='VAL')
+                       osp.join(args.out_dir, out_name), split_name='VAL',
+                       canvas_size=canvas_size)
 
     total_min = (time.time() - t0) / 60
     print(f'\nAll done in {total_min:.1f} min.')

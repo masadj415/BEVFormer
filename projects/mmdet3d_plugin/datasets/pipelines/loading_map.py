@@ -149,6 +149,73 @@ class LoadMapMask:
                 f'patch=({self.patch_h}m x {self.patch_w}m))')
 
 
+# Channel index of each layer inside the .npz produced by create_HD_map.py
+_SEG_LAYER_IDX = {
+    'drivable_area': 0,
+    'road_segment':  1,
+    'road_block':    2,
+    'lane':          3,
+    'ped_crossing':  4,
+    'walkway':       5,
+    'stop_line':     6,
+    'carpark_area':  7,
+    'road_divider':  8,
+    'lane_divider':  9,
+}
+
+
+@PIPELINES.register_module()
+class LoadMapMaskFromNpz:
+    """Load pre-rasterised HD-map masks from the .npz path stored in the pkl.
+
+    Reads ``results['maps']['map_mask']`` — the per-sample .npz path written
+    by ``create_HD_map.py`` — and combines the 10 raw nuScenes layers into
+    the 6 logical map classes expected by MapSegHead.
+
+    Produces ``results['gt_masks_bev']`` with shape (num_classes, H, W),
+    float32, binary values.
+
+    Args:
+        classes (tuple[str]): Ordered logical class names.  Must match the
+            head's num_classes.  Keys must be in _MAP_CLASS_TO_LAYERS.
+    """
+
+    def __init__(
+        self,
+        classes=('drivable_area', 'ped_crossing', 'walkway',
+                 'stop_line', 'carpark_area', 'divider'),
+    ):
+        self.classes = list(classes)
+
+    def __call__(self, results):
+        maps = results.get('maps', {})
+        npz_path = maps.get('map_mask', None) if maps else None
+
+        if npz_path is None or not npz_path:
+            # No map available for this sample (e.g. test split)
+            gt_masks = np.zeros((len(self.classes), 200, 200), dtype=np.float32)
+            results['gt_masks_bev'] = DC(
+                torch.from_numpy(gt_masks), cpu_only=False, stack=True)
+            return results
+
+        raw = np.load(npz_path)['arr_0'].astype(np.float32)  # (10, H, W)
+        _, H, W = raw.shape
+
+        gt_masks = np.zeros((len(self.classes), H, W), dtype=np.float32)
+        for cls_idx, cls_name in enumerate(self.classes):
+            for layer_name in _MAP_CLASS_TO_LAYERS.get(cls_name, [cls_name]):
+                ch = _SEG_LAYER_IDX.get(layer_name)
+                if ch is not None:
+                    gt_masks[cls_idx] = np.logical_or(gt_masks[cls_idx], raw[ch])
+
+        results['gt_masks_bev'] = DC(
+            torch.from_numpy(gt_masks), cpu_only=False, stack=True)
+        return results
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(classes={self.classes})'
+
+
 @PIPELINES.register_module()
 class LoadMapMaskFromPkl:
     """Load pre-rasterised HD-map masks from a pickle file.
