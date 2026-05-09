@@ -137,3 +137,6 @@ dmypy.json
 
 test_data/
 v1.0-mini.tgz
+
+wandb/
+slurm_logs/

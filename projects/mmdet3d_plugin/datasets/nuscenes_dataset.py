@@ -116,6 +116,7 @@ class CustomNuScenesDataset(NuScenesDataset):
             can_bus=info['can_bus'],
             frame_idx=info['frame_idx'],
             timestamp=info['timestamp'] / 1e6,
+            maps=info.get('maps', {}),
         )
 
         if self.modality['use_camera']:

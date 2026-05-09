@@ -245,11 +245,11 @@ class BEVFormer(MVXTwoStageDetector):
 
         # Map segmentation head (shares encoder output — zero extra cost)
         if self.map_seg_head is not None and gt_masks_bev is not None:
-            bev_embed = outs['bev_embed']           # (B, bev_h*bev_w, C)
-            B = bev_embed.shape[0]
+            bev_embed = outs['bev_embed']           # (bev_h*bev_w, B, C)
+            B = bev_embed.shape[1]
             bev_h = self.pts_bbox_head.bev_h
             bev_w = self.pts_bbox_head.bev_w
-            bev_feat = bev_embed.permute(0, 2, 1).reshape(B, -1, bev_h, bev_w)
+            bev_feat = bev_embed.permute(1, 2, 0).reshape(B, -1, bev_h, bev_w)
             losses_seg = self.map_seg_head.forward_train(bev_feat, gt_masks_bev)
             losses.update(losses_seg)
 
@@ -302,11 +302,11 @@ class BEVFormer(MVXTwoStageDetector):
         ]
 
         if self.map_seg_head is not None:
-            bev_embed = outs['bev_embed']
-            B = bev_embed.shape[0]
+            bev_embed = outs['bev_embed']  # (bev_h*bev_w, B, C)
+            B = bev_embed.shape[1]
             bev_h = self.pts_bbox_head.bev_h
             bev_w = self.pts_bbox_head.bev_w
-            bev_feat = bev_embed.permute(0, 2, 1).reshape(B, -1, bev_h, bev_w)
+            bev_feat = bev_embed.permute(1, 2, 0).reshape(B, -1, bev_h, bev_w)
             seg_preds = self.map_seg_head.get_seg_maps(bev_feat)  # (B, C, H, W)
             for i, result in enumerate(bbox_results):
                 result['seg_preds'] = seg_preds[i].cpu().numpy()

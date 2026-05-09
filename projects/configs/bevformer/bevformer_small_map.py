@@ -10,62 +10,60 @@ point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 voxel_size = [0.2, 0.2, 8]
 
 img_norm_cfg = dict(
-    mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0], to_rgb=False)
+    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 
 class_names = [
     'car', 'truck', 'construction_vehicle', 'bus', 'trailer', 'barrier',
     'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone'
 ]
 
-# HD-map classes (nuScenes map layers / merged groups)
 map_classes = [
     'drivable_area', 'ped_crossing', 'walkway',
     'stop_line', 'carpark_area', 'divider',
 ]
 
+alpha = {
+    'drivable_area': 0.5,   # common, moderate
+    'ped_crossing':  0.75,  # rare
+    'walkway':       0.65,  # moderate-rare
+    'stop_line':     0.90,  # very rare, thin
+    'carpark_area':  0.65,  # moderate
+    'divider':       0.90,  # very rare, thin
+}
+
 input_modality = dict(
     use_lidar=False,
     use_camera=True,
     use_radar=False,
-    use_map=True,       # map annotations are now loaded
+    use_map=True,
     use_external=True)
 
 _dim_ = 256
 _pos_dim_ = _dim_ // 2
 _ffn_dim_ = _dim_ * 2
-_num_levels_ = 4
-bev_h_ = 200
-bev_w_ = 200
-queue_length = 4
+_num_levels_ = 1
+bev_h_ = 150
+bev_w_ = 150
+queue_length = 1  # VJepa features carry their own temporal info
 
-# Augmented pkl files produced by create_HD_map.py.
-# Each sample in these pkls has info['maps']['map_mask'] = '/path/to/token.npz'.
-train_ann_file = '/transfer/NaTaMaPa/nuscenes_metadata/nuscenes_infos_temporal_train_with_map_200.pkl'
-val_ann_file   = '/transfer/NaTaMaPa/nuscenes_metadata/nuscenes_infos_temporal_val_with_map_200.pkl'
+vjepa_h5_path = '/transfer/NaTaMaPa/train_features_vitb_368x656_T4_rank0_of_1.h5'
+train_ann_file = '/transfer/NaTaMaPa/nuscenes_metadata/nuscenes_infos_temporal_train_with_map_150.pkl'
+val_ann_file   = '/transfer/NaTaMaPa/nuscenes_metadata/nuscenes_infos_temporal_val_with_map_150.pkl'
 
 model = dict(
-    type='BEVFormer',
-    use_grid_mask=True,
-    video_test_mode=True,
-    img_backbone=dict(
-        type='ResNet',
-        depth=101,
-        num_stages=4,
-        out_indices=(1, 2, 3),
-        frozen_stages=1,
-        norm_cfg=dict(type='BN2d', requires_grad=False),
-        norm_eval=True,
-        style='caffe',
-        dcn=dict(type='DCNv2', deform_groups=1, fallback_on_stride=False),
-        stage_with_dcn=(False, False, True, True)),
-    img_neck=dict(
-        type='FPN',
-        in_channels=[512, 1024, 2048],
-        out_channels=_dim_,
-        start_level=0,
-        add_extra_convs='on_output',
-        num_outs=4,
-        relu_before_extra_convs=True),
+    type='BEVFormerVJepa',
+    use_grid_mask=False,
+    video_test_mode=False,
+    pretrained=None,
+    vjepa_in_dim=768,
+    vjepa_out_dim=_dim_,
+    vjepa_h=23,
+    vjepa_w=41,
+    vjepa_temporal_reduce='gated',
+    vjepa_adapter_hidden_dim=512,
+    vjepa_gate_hidden_dim=256,
+    img_backbone=None,
+    img_neck=None,
     pts_bbox_head=dict(
         type='BEVFormerHead',
         bev_h=bev_h_,
@@ -152,17 +150,23 @@ model = dict(
             loss_weight=2.0),
         loss_bbox=dict(type='L1Loss', loss_weight=0.25),
         loss_iou=dict(type='GIoULoss', loss_weight=0.0)),
-    # HD-map segmentation head — runs on the same BEV features as detection
     map_seg_head=dict(
         type='MapSegHead',
         in_channels=_dim_,
-        num_classes=len(map_classes),   # 6
+        num_classes=len(map_classes),
         loss_seg=dict(
-            type='FocalLoss',
+            type='FocalLoss',       # type field still needed for config parsing
             use_sigmoid=True,
             gamma=2.0,
-            alpha=0.25,
-            loss_weight=1.0,
+            alpha=[
+                0.50,   # drivable_area  — common, ~30-40% of BEV
+                0.75,   # ped_crossing   — rare
+                0.65,   # walkway        — moderate
+                0.90,   # stop_line      — very rare, thin lines
+                0.65,   # carpark_area   — moderate
+                0.90,   # divider        — very rare, thin lines
+            ],
+            loss_weight=10.0,
         ),
     ),
     train_cfg=dict(pts=dict(
@@ -178,38 +182,29 @@ model = dict(
             pc_range=point_cloud_range))))
 
 dataset_type = 'CustomNuScenesDataset'
-data_root = 'data/nuscenes/'
+data_root = '/scratch/izar/mduric/nuscenes_trainval/'
+#data_root = '/transfer/NaTaMaPa/nuscenes_trainval/' ## only use after moving to transfer from masa's scratch
 file_client_args = dict(backend='disk')
 
 train_pipeline = [
-    dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    dict(type='PhotoMetricDistortionMultiViewImage'),
+    dict(type='LoadVJepaFeaturesFromH5', h5_path=vjepa_h5_path, group='vitb'),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
-    # Load pre-rasterised HD-map masks from the .npz path stored in the pkl
     dict(type='LoadMapMaskFromNpz', classes=map_classes),
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=class_names),
-    dict(type='NormalizeMultiviewImage', **img_norm_cfg),
-    dict(type='PadMultiViewImage', size_divisor=32),
-    dict(type='DefaultFormatBundle3D', class_names=class_names),
-    # gt_masks_bev is already a stacked DC — just collect it
+    dict(type='VJepaFormatBundle3D', class_names=class_names),
     dict(type='CustomCollect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img', 'gt_masks_bev']),
 ]
 
 test_pipeline = [
-    dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    dict(type='NormalizeMultiviewImage', **img_norm_cfg),
-    dict(type='PadMultiViewImage', size_divisor=32),
+    dict(type='LoadVJepaFeaturesFromH5', h5_path=vjepa_h5_path, group='vitb'),
     dict(
         type='MultiScaleFlipAug3D',
         img_scale=(1600, 900),
         pts_scale_ratio=1,
         flip=False,
         transforms=[
-            dict(
-                type='DefaultFormatBundle3D',
-                class_names=class_names,
-                with_label=False),
+            dict(type='VJepaFormatBundle3D', class_names=class_names, with_label=False),
             dict(type='CustomCollect3D', keys=['img'])
         ])
 ]
@@ -252,30 +247,39 @@ data = dict(
 
 optimizer = dict(
     type='AdamW',
-    lr=2e-4,
-    paramwise_cfg=dict(
-        custom_keys={
-            'img_backbone': dict(lr_mult=0.1),
-        }),
+    lr=1.5e-4,
     weight_decay=0.01)
 
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 lr_config = dict(
     policy='CosineAnnealing',
+    by_epoch=False,
     warmup='linear',
-    warmup_iters=500,
-    warmup_ratio=1.0 / 3,
+    warmup_by_epoch=False,
+    warmup_iters=2000,       # was 500 → 4× longer
+    warmup_ratio=1.0 / 10,   # was 1/3 → start even lower
     min_lr_ratio=1e-3)
-total_epochs = 24
-evaluation = dict(interval=1, pipeline=test_pipeline)
+total_epochs = 30
+evaluation = dict(interval=3, metric='bbox', pipeline=test_pipeline, start=1)
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
-load_from = 'ckpts/r101_dcn_fcos3d_pretrain.pth'
+
 log_config = dict(
-    interval=50,
+    interval=10,
     hooks=[
         dict(type='TextLoggerHook'),
-        dict(type='TensorboardLoggerHook')
+        dict(type='WandbLoggerHook',
+             init_kwargs=dict(
+                 project='bevformer_map',
+                 name='vjepa_small_bev150_map',
+                 config=dict(
+                     model='BEVFormerVJepa',
+                     features='V-JEPA cached',
+                     bev_h=bev_h_,
+                     bev_w=bev_w_,
+                     map_classes=map_classes,
+                 )
+             )),
     ])
 
 checkpoint_config = dict(interval=1)

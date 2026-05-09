@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from mmcv.runner import BaseModule, force_fp32
 from mmdet.models import HEADS
-from mmdet.models.builder import build_loss
 
 
 @HEADS.register_module()
@@ -52,7 +52,20 @@ class MapSegHead(BaseModule):
     ):
         super(MapSegHead, self).__init__(init_cfg=init_cfg)
         self.num_classes = num_classes
-        self.loss_seg = build_loss(loss_seg)
+        # Store focal loss params directly — mmdet FocalLoss CUDA kernel
+        # requires long class-index targets, incompatible with our binary
+        # float masks. We implement sigmoid focal loss manually via F.bce.
+        loss_cfg = loss_seg if isinstance(loss_seg, dict) else {}
+        self.gamma = loss_cfg.get('gamma', 2.0)
+        alpha = loss_cfg.get('alpha', 0.25)
+        if isinstance(alpha, (list, tuple)):
+            assert len(alpha) == num_classes, \
+                f"alpha list length {len(alpha)} must match num_classes {num_classes}"
+            self.register_buffer('alpha', torch.tensor(alpha, dtype=torch.float32))
+        else:
+            # scalar fallback — same behaviour as before
+            self.register_buffer('alpha', torch.tensor([alpha] * num_classes, dtype=torch.float32))
+        self.loss_weight = loss_cfg.get('loss_weight', 1.0)
 
         # Three-layer conv decoder matching BEVFusion's lightweight head.
         # No upsampling: BEVFormer BEV features are already at 200×200.
@@ -77,19 +90,30 @@ class MapSegHead(BaseModule):
 
     @force_fp32(apply_to=('seg_logits',))
     def loss(self, seg_logits, gt_masks_bev):
-        """Element-wise focal loss over all classes and spatial positions.
+        """Binary sigmoid focal loss over all classes and spatial positions.
 
         Args:
             seg_logits (Tensor): Raw logits (B, num_classes, H, W).
-            gt_masks_bev (Tensor): Binary GT masks  (B, num_classes, H, W).
+            gt_masks_bev (Tensor): Binary GT masks (B, num_classes, H, W).
         Returns:
             dict: {'loss_seg': scalar}
         """
+        pred = seg_logits.reshape(-1)
+        target = gt_masks_bev.reshape(-1).float()
+
+        # sigmoid focal loss for binary float targets
         B, C, H, W = seg_logits.shape
-        loss = self.loss_seg(
-            seg_logits.reshape(B * C, H * W),
-            gt_masks_bev.reshape(B * C, H * W).float(),
-        )
+        target = gt_masks_bev.float()  # (B, C, H, W)
+
+        # expand alpha to (1, C, 1, 1) so it broadcasts over B, H, W
+        alpha = self.alpha.view(1, C, 1, 1)  # (1, 6, 1, 1)
+        alpha_t = alpha * target + (1 - alpha) * (1 - target)  # (B, C, H, W)
+
+        pred_sigmoid = seg_logits.sigmoid()
+        pt = pred_sigmoid * target + (1 - pred_sigmoid) * (1 - target)
+        focal_weight = alpha_t * (1 - pt).pow(self.gamma)
+        bce = F.binary_cross_entropy_with_logits(seg_logits, target, reduction='none')
+        loss = (focal_weight * bce).mean() * self.loss_weight
         return dict(loss_seg=loss)
 
     def forward_train(self, bev_feat, gt_masks_bev):

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=bevformer_map
+#SBATCH --job-name=bev_base_map
 #SBATCH --account=cs-503
 #SBATCH --qos=cs-503
 #SBATCH --nodes=1
