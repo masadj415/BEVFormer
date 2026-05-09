@@ -275,7 +275,7 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=12,
+    samples_per_gpu=8,
     workers_per_gpu=0,
 
     train=dict(
@@ -345,7 +345,7 @@ runner = dict(
 )
 
 evaluation = dict(
-    interval=1,
+    interval=3,
     metric='bbox',
     pipeline=test_pipeline
 )
@@ -368,7 +368,7 @@ log_config = dict(
                     temporal_reduce='gated',
                     adapter='768-512-512-256 conv3x3',
                     gate_hidden_dim=256,
-                    samples_per_gpu=12,
+                    samples_per_gpu=8,
                     workers_per_gpu=0,
                     queue_length=queue_length,
                     bev_h=bev_h_,
@@ -383,5 +383,5 @@ log_config = dict(
 )
 
 checkpoint_config = dict(
-    interval=4
+    interval=2
 )
