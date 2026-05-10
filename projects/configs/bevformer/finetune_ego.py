@@ -14,7 +14,7 @@ optimizer = dict(
             'pts_bbox_head':  dict(lr_mult=0.0, decay_mult=0.0),
             'map_seg_head':   dict(lr_mult=0.0, decay_mult=0.0),
             'vjepa_adapter':  dict(lr_mult=0.0, decay_mult=0.0),
-            'vjepa_gate':     dict(lr_mult=0.0, decay_mult=0.0),
+            'vjepa_temporal_gate': dict(lr_mult=0.0, decay_mult=0.0),
         }
     )
 )
@@ -31,7 +31,7 @@ lr_config = dict(
     min_lr_ratio=1e-3)
 
 total_epochs = 10
-evaluation = dict(interval=2, metric='bbox', pipeline={{_base_.test_pipeline}}, start=2)
+evaluation = dict(interval=2, metric='ego', start=2)
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 checkpoint_config = dict(interval=2)
 

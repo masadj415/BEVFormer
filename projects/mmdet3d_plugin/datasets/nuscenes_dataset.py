@@ -218,17 +218,24 @@ class CustomNuScenesDataset(NuScenesDataset):
     def evaluate(self, results, metric='bbox', logger=None, jsonfile_prefix=None,
                  result_names=['pts_bbox'], show=False, out_dir=None,
                  pipeline=None, seg_viz_dir=None, seg_num_viz=16):
-        """Evaluate with both detection and segmentation metrics.
+        """Evaluate detection, segmentation, and/or ego trajectory.
+
+        Pass metric='ego' to skip the expensive NuScenes bbox evaluation and
+        only compute ego trajectory L2 (and seg mIoU if seg_preds present).
 
         Extra kwargs (passable via --eval-options):
             seg_viz_dir (str): Directory to save GT vs Pred BEV images.
             seg_num_viz (int): Number of evenly-spaced samples to visualise.
         """
-        # Run the parent bbox evaluation
-        result_dict = super().evaluate(
-            results, metric=metric, logger=logger,
-            jsonfile_prefix=jsonfile_prefix, result_names=result_names,
-            show=show, out_dir=out_dir, pipeline=pipeline)
+        metrics = metric if isinstance(metric, list) else [metric]
+
+        result_dict = {}
+        if 'ego' not in metrics:
+            # Full NuScenes detection evaluation — skip when metric='ego'
+            result_dict = super().evaluate(
+                results, metric=metric, logger=logger,
+                jsonfile_prefix=jsonfile_prefix, result_names=result_names,
+                show=show, out_dir=out_dir, pipeline=pipeline)
 
         # Segmentation mIoU evaluation
         if results and isinstance(results[0], dict):
