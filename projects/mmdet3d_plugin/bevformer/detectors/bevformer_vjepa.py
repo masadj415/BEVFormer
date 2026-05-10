@@ -493,6 +493,7 @@ class BEVFormerVJepa(BEVFormer):
         img_depth=None,
         img_mask=None,
         gt_masks_bev=None,
+        gt_ego_waypoints=None,
     ):
         """
         V-JEPA training path.
@@ -515,14 +516,18 @@ class BEVFormerVJepa(BEVFormer):
             gt_bboxes_3d, gt_labels_3d, outs, img_metas=img_metas)
         losses.update(losses_pts)
 
-        if self.map_seg_head is not None and gt_masks_bev is not None:
+        if self.map_seg_head is not None or self.ego_traj_head is not None:
             bev_embed = outs['bev_embed']           # (bev_h*bev_w, B, C)
             B = bev_embed.shape[1]
             bev_h = self.pts_bbox_head.bev_h
             bev_w = self.pts_bbox_head.bev_w
             bev_feat = bev_embed.permute(1, 2, 0).reshape(B, -1, bev_h, bev_w)
-            losses_seg = self.map_seg_head.forward_train(bev_feat, gt_masks_bev)
-            losses.update(losses_seg)
+
+            if self.map_seg_head is not None and gt_masks_bev is not None:
+                losses.update(self.map_seg_head.forward_train(bev_feat, gt_masks_bev))
+
+            if self.ego_traj_head is not None and gt_ego_waypoints is not None:
+                losses.update(self.ego_traj_head.forward_train(bev_feat, gt_ego_waypoints))
 
         return losses
     

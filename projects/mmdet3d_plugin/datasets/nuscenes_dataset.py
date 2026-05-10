@@ -4,6 +4,7 @@ import numpy as np
 from mmdet.datasets import DATASETS
 from mmdet3d.datasets import NuScenesDataset
 import mmcv
+import os
 from os import path as osp
 from mmdet.datasets import DATASETS
 import torch
@@ -27,6 +28,8 @@ class CustomNuScenesDataset(NuScenesDataset):
         self.queue_length = queue_length
         self.overlap_test = overlap_test
         self.bev_size = bev_size
+        # token → data_infos index, used for future waypoint computation
+        self._token_to_idx = {info['token']: i for i, info in enumerate(self.data_infos)}
         
     def prepare_train_data(self, index):
         """
@@ -82,6 +85,35 @@ class CustomNuScenesDataset(NuScenesDataset):
         queue[-1]['img_metas'] = DC(metas_map, cpu_only=True)
         queue = queue[-1]
         return queue
+
+    def _get_future_waypoints(self, index, num_waypoints=6):
+        """Return future ego positions in current ego frame.
+
+        Follows the next-token chain for num_waypoints steps (0.5s each at 2Hz).
+        Missing frames (scene boundary) are padded with -999.
+
+        Returns:
+            np.ndarray: (num_waypoints, 2) — (x_forward, y_left) in meters.
+        """
+        info = self.data_infos[index]
+        cur_trans = np.array(info['ego2global_translation'], dtype=np.float64)
+        cur_rot = Quaternion(info['ego2global_rotation']).rotation_matrix  # (3,3)
+
+        waypoints = np.full((num_waypoints, 2), -999.0, dtype=np.float32)
+        next_token = info.get('next', '')
+        for i in range(num_waypoints):
+            if not next_token:
+                break
+            next_idx = self._token_to_idx.get(next_token, None)
+            if next_idx is None:
+                break
+            next_info = self.data_infos[next_idx]
+            next_trans = np.array(next_info['ego2global_translation'], dtype=np.float64)
+            delta_global = next_trans - cur_trans                # (3,) in world frame
+            delta_ego = cur_rot.T @ delta_global                 # (3,) in ego frame
+            waypoints[i] = delta_ego[:2].astype(np.float32)     # (x_fwd, y_left)
+            next_token = next_info.get('next', '')
+        return waypoints
 
     def get_data_info(self, index):
         """Get data info according to the given index.
@@ -153,6 +185,7 @@ class CustomNuScenesDataset(NuScenesDataset):
         if not self.test_mode:
             annos = self.get_ann_info(index)
             input_dict['ann_info'] = annos
+            input_dict['gt_ego_waypoints'] = self._get_future_waypoints(index)
 
         rotation = Quaternion(input_dict['ego2global_rotation'])
         translation = input_dict['ego2global_translation']
@@ -184,8 +217,13 @@ class CustomNuScenesDataset(NuScenesDataset):
 
     def evaluate(self, results, metric='bbox', logger=None, jsonfile_prefix=None,
                  result_names=['pts_bbox'], show=False, out_dir=None,
-                 pipeline=None):
-        """Evaluate with both detection and segmentation metrics."""
+                 pipeline=None, seg_viz_dir=None, seg_num_viz=16):
+        """Evaluate with both detection and segmentation metrics.
+
+        Extra kwargs (passable via --eval-options):
+            seg_viz_dir (str): Directory to save GT vs Pred BEV images.
+            seg_num_viz (int): Number of evenly-spaced samples to visualise.
+        """
         # Run the parent bbox evaluation
         result_dict = super().evaluate(
             results, metric=metric, logger=logger,
@@ -196,13 +234,79 @@ class CustomNuScenesDataset(NuScenesDataset):
         if results and isinstance(results[0], dict):
             first = results[0].get('pts_bbox', results[0])
             if 'seg_preds' in first:
-                seg_result = self._evaluate_seg(results, logger=logger)
+                seg_result = self._evaluate_seg(
+                    results, logger=logger,
+                    viz_dir=seg_viz_dir, num_viz=int(seg_num_viz))
                 result_dict.update(seg_result)
+
+        # Ego trajectory L2 evaluation
+        if results and isinstance(results[0], dict):
+            first = results[0].get('pts_bbox', results[0])
+            if 'ego_waypoints' in first:
+                traj_result = self._evaluate_ego_traj(results, logger=logger)
+                result_dict.update(traj_result)
 
         return result_dict
 
-    def _evaluate_seg(self, results, iou_thr=0.5, logger=None):
-        """Compute per-class IoU for map segmentation."""
+    def _evaluate_ego_traj(self, results, logger=None):
+        """nuScenes planning evaluation: L2 displacement at 1s / 2s / 3s.
+
+        Waypoints are at 0.5s intervals so:
+            t = 1s → waypoint index 1
+            t = 2s → waypoint index 3
+            t = 3s → waypoint index 5
+
+        GT is computed on-the-fly from ego pose chain (no test pipeline change
+        needed). Samples at scene boundaries with fewer than N future frames are
+        counted only for the available timesteps.
+
+        Returns:
+            dict with keys 'traj/L2_1s', 'traj/L2_2s', 'traj/L2_3s', 'traj/avg_L2'
+        """
+        # Evaluation timesteps: (label, 0-indexed waypoint position)
+        eval_times = [('1s', 1), ('2s', 3), ('3s', 5)]
+        l2_sums = {label: 0.0 for label, _ in eval_times}
+        counts  = {label: 0   for label, _ in eval_times}
+
+        for i, res in enumerate(results):
+            pred = res.get('pts_bbox', res).get('ego_waypoints', None)
+            if pred is None:
+                continue
+            gt = self._get_future_waypoints(i)  # (6, 2), -999 padding
+
+            for label, t_idx in eval_times:
+                if gt[t_idx, 0] < -900:
+                    continue  # scene boundary — no GT at this horizon
+                l2 = float(np.linalg.norm(pred[t_idx] - gt[t_idx]))
+                l2_sums[label] += l2
+                counts[label]  += 1
+
+        result = {}
+        valid_l2 = []
+        for label, _ in eval_times:
+            n = counts[label]
+            val = l2_sums[label] / n if n > 0 else float('nan')
+            result[f'traj/L2_{label}'] = val
+            if n > 0:
+                valid_l2.append(val)
+
+        result['traj/avg_L2'] = float(np.mean(valid_l2)) if valid_l2 else float('nan')
+
+        if logger is not None:
+            mmcv.print_log('\nEgo Trajectory L2 (m):', logger)
+            for label, _ in eval_times:
+                mmcv.print_log(f'  L2 @ {label}: {result[f"traj/L2_{label}"]:.4f}', logger)
+            mmcv.print_log(f'  avg-L2    : {result["traj/avg_L2"]:.4f}', logger)
+        else:
+            print('\nEgo Trajectory L2 (m):')
+            for label, _ in eval_times:
+                print(f'  L2 @ {label}: {result[f"traj/L2_{label}"]:.4f}')
+            print(f'  avg-L2    : {result["traj/avg_L2"]:.4f}')
+
+        return result
+
+    def _evaluate_seg(self, results, iou_thr=0.5, logger=None, viz_dir=None, num_viz=16):
+        """Compute per-class IoU for map segmentation, optionally saving GT vs Pred visualizations."""
         map_classes = [
             'drivable_area', 'ped_crossing', 'walkway',
             'stop_line', 'carpark_area', 'divider',
@@ -220,9 +324,25 @@ class CustomNuScenesDataset(NuScenesDataset):
             'carpark_area':  ['carpark_area'],
             'divider':       ['road_divider', 'lane_divider'],
         }
+        # RGB colours per class for the composite overlay image
+        _CLASS_COLORS = [
+            (0,   180,   0),   # drivable_area  — green
+            (255, 160,   0),   # ped_crossing   — orange
+            (0,   200, 255),   # walkway        — cyan
+            (255,   0,   0),   # stop_line      — red
+            (180,   0, 255),   # carpark_area   — purple
+            (255, 255,   0),   # divider        — yellow
+        ]
         num_classes = len(map_classes)
         intersection = np.zeros(num_classes)
         union        = np.zeros(num_classes)
+
+        # Evenly-spaced indices to visualise
+        viz_indices = set(
+            int(i) for i in np.linspace(0, len(results) - 1, num_viz)
+        ) if viz_dir is not None else set()
+        if viz_dir is not None:
+            os.makedirs(viz_dir, exist_ok=True)
 
         for i, res in enumerate(results):
             pred_raw = res.get('pts_bbox', res).get('seg_preds', None)
@@ -251,9 +371,9 @@ class CustomNuScenesDataset(NuScenesDataset):
             # Resize pred to GT resolution if needed
             if pred.shape[1:] != gt.shape[1:]:
                 import torch
-                import torch.nn.functional as F
-                pred_t = torch.from_numpy(pred).unsqueeze(0)  # (1, C, H, W)
-                pred_t = F.interpolate(pred_t, size=gt.shape[1:], mode='nearest')
+                import torch.nn.functional as _F
+                pred_t = torch.from_numpy(pred).unsqueeze(0)
+                pred_t = _F.interpolate(pred_t, size=gt.shape[1:], mode='nearest')
                 pred = pred_t.squeeze(0).numpy()
 
             for c in range(num_classes):
@@ -261,6 +381,10 @@ class CustomNuScenesDataset(NuScenesDataset):
                 g = gt[c].astype(bool)
                 intersection[c] += (p & g).sum()
                 union[c]        += (p | g).sum()
+
+            if i in viz_indices:
+                self._save_seg_viz(gt, pred, map_classes, _CLASS_COLORS,
+                                   osp.join(viz_dir, f'sample_{i:05d}.png'))
 
         iou_per_class = np.zeros(num_classes)
         for c in range(num_classes):
@@ -275,14 +399,66 @@ class CustomNuScenesDataset(NuScenesDataset):
         if logger is not None:
             mmcv.print_log(f'\nMap Segmentation mIoU: {miou:.4f}', logger)
             for c, name in enumerate(map_classes):
-                mmcv.print_log(
-                    f'  {name:20s}: {iou_per_class[c]:.4f}', logger)
+                mmcv.print_log(f'  {name:20s}: {iou_per_class[c]:.4f}', logger)
         else:
             print(f'\nMap Segmentation mIoU: {miou:.4f}')
             for c, name in enumerate(map_classes):
                 print(f'  {name:20s}: {iou_per_class[c]:.4f}')
 
         return seg_result
+
+    @staticmethod
+    def _save_seg_viz(gt, pred, class_names, colors, save_path):
+        """Save a side-by-side GT | Pred composite BEV image.
+
+        Layout: one row per class — left = GT, right = Pred.
+        A colour-coded composite overlay is added as the last row.
+        """
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+
+        num_classes, H, W = gt.shape
+        fig, axes = plt.subplots(
+            num_classes + 1, 2,
+            figsize=(6, (num_classes + 1) * 2.2),
+            gridspec_kw={'hspace': 0.05, 'wspace': 0.02})
+
+        for c, name in enumerate(class_names):
+            r, g_ch, b = colors[c]
+            color_norm = (r / 255, g_ch / 255, b / 255)
+            for col, mask in enumerate([gt[c], pred[c]]):
+                ax = axes[c, col]
+                rgb = np.zeros((H, W, 3), dtype=np.float32)
+                rgb[mask.astype(bool)] = color_norm
+                ax.imshow(rgb, origin='lower', vmin=0, vmax=1)
+                ax.set_xticks([]); ax.set_yticks([])
+                if col == 0:
+                    ax.set_ylabel(name, fontsize=7, rotation=0,
+                                  labelpad=55, va='center')
+
+        # Composite overlay row
+        for col, masks in enumerate([gt, pred]):
+            ax = axes[num_classes, col]
+            composite = np.zeros((H, W, 3), dtype=np.float32)
+            for c in range(num_classes):
+                r, g_ch, b = colors[c]
+                m = masks[c].astype(bool)
+                composite[m, 0] = r / 255
+                composite[m, 1] = g_ch / 255
+                composite[m, 2] = b / 255
+            ax.imshow(composite, origin='lower')
+            ax.set_xticks([]); ax.set_yticks([])
+            ax.set_title('GT' if col == 0 else 'Pred', fontsize=9)
+
+        patches = [mpatches.Patch(color=tuple(c / 255 for c in colors[i]),
+                                  label=class_names[i])
+                   for i in range(num_classes)]
+        fig.legend(handles=patches, loc='lower center', ncol=3,
+                   fontsize=7, bbox_to_anchor=(0.5, -0.01))
+        plt.savefig(save_path, dpi=120, bbox_inches='tight')
+        plt.close(fig)
 
     def _evaluate_single(self,
                          result_path,

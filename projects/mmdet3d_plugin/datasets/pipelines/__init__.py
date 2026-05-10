@@ -11,6 +11,7 @@ except ImportError:
 from .loading_vjepa import LoadVJepaFeaturesFromH5
 from .formatting_vjepa import VJepaFormatBundle3D
 from .loading_map import LoadMapMask, LoadMapMaskFromPkl, LoadMapMaskFromNpz
+from .loading_ego import LoadFutureEgoWaypoints
 __all__ = [
     'PadMultiViewImage', 'NormalizeMultiviewImage',
     'PhotoMetricDistortionMultiViewImage', 'CustomDefaultFormatBundle3D', 'CustomCollect3D',
@@ -22,4 +23,5 @@ __all__ = [
     'LoadMapMask',
     'LoadMapMaskFromPkl',
     'LoadMapMaskFromNpz',
+    'LoadFutureEgoWaypoints',
 ]

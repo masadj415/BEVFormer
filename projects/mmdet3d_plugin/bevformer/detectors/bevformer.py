@@ -43,6 +43,7 @@ class BEVFormer(MVXTwoStageDetector):
                  pretrained=None,
                  video_test_mode=False,
                  map_seg_head=None,
+                 ego_traj_head=None,
                  ):
 
         super(BEVFormer,
@@ -67,6 +68,8 @@ class BEVFormer(MVXTwoStageDetector):
 
         # optional HD-map segmentation head (shares the BEV encoder output)
         self.map_seg_head = build_head(map_seg_head) if map_seg_head is not None else None
+        # optional ego trajectory prediction head
+        self.ego_traj_head = build_head(ego_traj_head) if ego_traj_head is not None else None
 
 
     def extract_img_feat(self, img, img_metas, len_queue=None):
@@ -301,15 +304,22 @@ class BEVFormer(MVXTwoStageDetector):
             for bboxes, scores, labels in bbox_list
         ]
 
-        if self.map_seg_head is not None:
+        if self.map_seg_head is not None or self.ego_traj_head is not None:
             bev_embed = outs['bev_embed']  # (bev_h*bev_w, B, C)
             B = bev_embed.shape[1]
             bev_h = self.pts_bbox_head.bev_h
             bev_w = self.pts_bbox_head.bev_w
             bev_feat = bev_embed.permute(1, 2, 0).reshape(B, -1, bev_h, bev_w)
-            seg_preds = self.map_seg_head.get_seg_maps(bev_feat)  # (B, C, H, W)
-            for i, result in enumerate(bbox_results):
-                result['seg_preds'] = seg_preds[i].cpu().numpy()
+
+            if self.map_seg_head is not None:
+                seg_preds = self.map_seg_head.get_seg_maps(bev_feat)  # (B, C, H, W)
+                for i, result in enumerate(bbox_results):
+                    result['seg_preds'] = seg_preds[i].cpu().numpy()
+
+            if self.ego_traj_head is not None:
+                wp_preds = self.ego_traj_head.get_waypoints(bev_feat)  # (B, N, 2)
+                for i, result in enumerate(bbox_results):
+                    result['ego_waypoints'] = wp_preds[i].cpu().numpy()
 
         return outs['bev_embed'], bbox_results
 

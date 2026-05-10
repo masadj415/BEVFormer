@@ -149,6 +149,13 @@ model = dict(
             loss_weight=2.0),
         loss_bbox=dict(type='L1Loss', loss_weight=0.25),
         loss_iou=dict(type='GIoULoss', loss_weight=0.0)),
+    ego_traj_head=dict(
+        type='EgoTrajectoryHead',
+        in_channels=_dim_,
+        hidden_dim=256,
+        num_waypoints=6,
+        loss_weight=1.0,
+    ),
     map_seg_head=dict(
         type='MapSegHead',
         in_channels=_dim_,
@@ -189,10 +196,11 @@ train_pipeline = [
          img_h=vjepa_feat_h, img_w=vjepa_feat_w),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     dict(type='LoadMapMaskFromNpz', classes=map_classes),
+    dict(type='LoadFutureEgoWaypoints'),
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=class_names),
     dict(type='VJepaFormatBundle3D', class_names=class_names),
-    dict(type='CustomCollect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img', 'gt_masks_bev']),
+    dict(type='CustomCollect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img', 'gt_masks_bev', 'gt_ego_waypoints']),
 ]
 
 test_pipeline = [
