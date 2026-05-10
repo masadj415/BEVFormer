@@ -182,6 +182,108 @@ class CustomNuScenesDataset(NuScenesDataset):
                 continue
             return data
 
+    def evaluate(self, results, metric='bbox', logger=None, jsonfile_prefix=None,
+                 result_names=['pts_bbox'], show=False, out_dir=None,
+                 pipeline=None):
+        """Evaluate with both detection and segmentation metrics."""
+        # Run the parent bbox evaluation
+        result_dict = super().evaluate(
+            results, metric=metric, logger=logger,
+            jsonfile_prefix=jsonfile_prefix, result_names=result_names,
+            show=show, out_dir=out_dir, pipeline=pipeline)
+
+        # Segmentation mIoU evaluation
+        if results and isinstance(results[0], dict):
+            first = results[0].get('pts_bbox', results[0])
+            if 'seg_preds' in first:
+                seg_result = self._evaluate_seg(results, logger=logger)
+                result_dict.update(seg_result)
+
+        return result_dict
+
+    def _evaluate_seg(self, results, iou_thr=0.5, logger=None):
+        """Compute per-class IoU for map segmentation."""
+        map_classes = [
+            'drivable_area', 'ped_crossing', 'walkway',
+            'stop_line', 'carpark_area', 'divider',
+        ]
+        _SEG_LAYER_IDX = {
+            'drivable_area': 0, 'road_segment': 1, 'road_block': 2, 'lane': 3,
+            'ped_crossing': 4, 'walkway': 5, 'stop_line': 6,
+            'carpark_area': 7, 'road_divider': 8, 'lane_divider': 9,
+        }
+        _CLASS_TO_LAYERS = {
+            'drivable_area': ['drivable_area'],
+            'ped_crossing':  ['ped_crossing'],
+            'walkway':       ['walkway'],
+            'stop_line':     ['stop_line'],
+            'carpark_area':  ['carpark_area'],
+            'divider':       ['road_divider', 'lane_divider'],
+        }
+        num_classes = len(map_classes)
+        intersection = np.zeros(num_classes)
+        union        = np.zeros(num_classes)
+
+        for i, res in enumerate(results):
+            pred_raw = res.get('pts_bbox', res).get('seg_preds', None)
+            if pred_raw is None:
+                continue
+            pred = (pred_raw > iou_thr).astype(np.float32)  # (C, H, W)
+
+            # Load GT from NPZ
+            maps = self.data_infos[i].get('maps', {})
+            npz_path = maps.get('map_mask', None) if maps else None
+            if npz_path is None or not npz_path:
+                continue
+            try:
+                raw = np.load(npz_path)['arr_0'].astype(np.float32)  # (10, H, W)
+            except Exception:
+                continue
+            _, H, W = raw.shape
+
+            gt = np.zeros((num_classes, H, W), dtype=np.float32)
+            for cls_idx, cls_name in enumerate(map_classes):
+                for layer in _CLASS_TO_LAYERS[cls_name]:
+                    ch = _SEG_LAYER_IDX.get(layer)
+                    if ch is not None:
+                        gt[cls_idx] = np.logical_or(gt[cls_idx], raw[ch])
+
+            # Resize pred to GT resolution if needed
+            if pred.shape[1:] != gt.shape[1:]:
+                import torch
+                import torch.nn.functional as F
+                pred_t = torch.from_numpy(pred).unsqueeze(0)  # (1, C, H, W)
+                pred_t = F.interpolate(pred_t, size=gt.shape[1:], mode='nearest')
+                pred = pred_t.squeeze(0).numpy()
+
+            for c in range(num_classes):
+                p = pred[c].astype(bool)
+                g = gt[c].astype(bool)
+                intersection[c] += (p & g).sum()
+                union[c]        += (p | g).sum()
+
+        iou_per_class = np.zeros(num_classes)
+        for c in range(num_classes):
+            if union[c] > 0:
+                iou_per_class[c] = intersection[c] / union[c]
+
+        miou = iou_per_class.mean()
+        seg_result = {'seg/mIoU': float(miou)}
+        for c, name in enumerate(map_classes):
+            seg_result[f'seg/{name}_IoU'] = float(iou_per_class[c])
+
+        if logger is not None:
+            mmcv.print_log(f'\nMap Segmentation mIoU: {miou:.4f}', logger)
+            for c, name in enumerate(map_classes):
+                mmcv.print_log(
+                    f'  {name:20s}: {iou_per_class[c]:.4f}', logger)
+        else:
+            print(f'\nMap Segmentation mIoU: {miou:.4f}')
+            for c, name in enumerate(map_classes):
+                print(f'  {name:20s}: {iou_per_class[c]:.4f}')
+
+        return seg_result
+
     def _evaluate_single(self,
                          result_path,
                          logger=None,
