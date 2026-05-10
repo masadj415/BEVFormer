@@ -46,6 +46,14 @@ bev_h_ = 150
 bev_w_ = 150
 queue_length = 1  # VJepa features carry their own temporal info
 
+# V-JEPA token grid (must match the h5 extraction resolution)
+# h5 stores (6, T*vjepa_h_*vjepa_w_, 768) per sample
+# For 368x656 input with 16x16 patches: H=23, W=41
+vjepa_h_ = 23
+vjepa_w_ = 41
+vjepa_feat_h = vjepa_h_ * 16   # 368 — used to scale camera intrinsics
+vjepa_feat_w = vjepa_w_ * 16   # 656 — used to scale camera intrinsics
+
 vjepa_h5_path = '/transfer/NaTaMaPa/train_features_vitb_368x656_T4_rank0_of_1.h5'
 train_ann_file = '/transfer/NaTaMaPa/nuscenes_metadata/nuscenes_infos_temporal_train_with_map_150.pkl'
 val_ann_file   = '/transfer/NaTaMaPa/nuscenes_metadata/nuscenes_infos_temporal_val_with_map_150.pkl'
@@ -57,8 +65,8 @@ model = dict(
     pretrained=None,
     vjepa_in_dim=768,
     vjepa_out_dim=_dim_,
-    vjepa_h=23,
-    vjepa_w=41,
+    vjepa_h=vjepa_h_,
+    vjepa_w=vjepa_w_,
     vjepa_temporal_reduce='gated',
     vjepa_adapter_hidden_dim=512,
     vjepa_gate_hidden_dim=256,
@@ -187,7 +195,8 @@ data_root = '/scratch/izar/mduric/nuscenes_trainval/'
 file_client_args = dict(backend='disk')
 
 train_pipeline = [
-    dict(type='LoadVJepaFeaturesFromH5', h5_path=vjepa_h5_path, group='vitb'),
+    dict(type='LoadVJepaFeaturesFromH5', h5_path=vjepa_h5_path, group='vitb',
+         img_h=vjepa_feat_h, img_w=vjepa_feat_w),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     dict(type='LoadMapMaskFromNpz', classes=map_classes),
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
@@ -197,7 +206,8 @@ train_pipeline = [
 ]
 
 test_pipeline = [
-    dict(type='LoadVJepaFeaturesFromH5', h5_path=vjepa_h5_path, group='vitb'),
+    dict(type='LoadVJepaFeaturesFromH5', h5_path=vjepa_h5_path, group='vitb',
+         img_h=vjepa_feat_h, img_w=vjepa_feat_w),
     dict(
         type='MultiScaleFlipAug3D',
         img_scale=(1600, 900),

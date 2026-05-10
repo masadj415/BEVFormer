@@ -18,7 +18,7 @@ class LoadVJepaFeaturesFromH5:
         vitb/<sample_token> -> [6, 672, 768]
     """
 
-    def __init__(self, h5_path, group="vitb", img_w=384, img_h=224, orig_w=1600, orig_h=900):
+    def __init__(self, h5_path, group="vitb", img_w=656, img_h=368, orig_w=1600, orig_h=900):
         self.h5_path = h5_path
         self.group = group
         self.img_w = img_w
