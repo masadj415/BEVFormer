@@ -40,10 +40,11 @@ class LoadVJepaFeaturesFromH5:
         raise KeyError(f"Cannot find sample token. Available keys: {list(results.keys())}")
 
     def _camera_from_path(self, path):
-        path = str(path)
-        for cam in CAMERAS:
-            if cam in path:
-                return cam
+        path = str(path).replace("\\", "/")
+        parts = path.split("/")
+        for part in parts:
+            if part in CAMERAS:
+                return part
         return None
 
     def _reorder_to_metadata_camera_order(self, feat, results):
@@ -54,13 +55,21 @@ class LoadVJepaFeaturesFromH5:
         """
         filenames = results.get("img_filename", None)
         if filenames is None:
-            return feat
+            raise KeyError("Missing img_filename, cannot align V-JEPA features with camera metadata.")
 
         meta_order = [self._camera_from_path(p) for p in filenames]
+
         if any(cam is None for cam in meta_order):
-            return feat
+            raise ValueError(f"Could not parse camera names from filenames: {filenames}")
+
+        if len(set(meta_order)) != len(CAMERAS):
+            raise ValueError(f"Camera parsing produced duplicate/missing cameras: {meta_order}")
 
         perm = [CAMERAS.index(cam) for cam in meta_order]
+
+        if sorted(perm) != list(range(len(CAMERAS))):
+            raise ValueError(f"Invalid camera permutation: perm={perm}, meta_order={meta_order}")
+
         return feat[perm]
     def _scale_geometry_to_vjepa_resolution(self, results):
         sx = self.img_w / self.orig_w
