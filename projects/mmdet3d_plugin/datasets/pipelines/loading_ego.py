@@ -18,5 +18,5 @@ class LoadFutureEgoWaypoints:
         if wp is None:
             return results
         wp_tensor = torch.from_numpy(np.asarray(wp, dtype=np.float32))  # (N, 2)
-        results['gt_ego_waypoints'] = DC(wp_tensor, cpu_only=False, stack=True)
+        results['gt_ego_waypoints'] = DC(wp_tensor, cpu_only=False, stack=True, pad_dims=None)        
         return results

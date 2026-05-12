@@ -46,3 +46,6 @@ log_config = dict(
                  config=dict(model='BEVFormerVJepa', task='ego_trajectory'),
              )),
     ])
+
+resume_from = None
+load_from = '/transfer/NaTaMaPa/bev_small_map/latest.pth'

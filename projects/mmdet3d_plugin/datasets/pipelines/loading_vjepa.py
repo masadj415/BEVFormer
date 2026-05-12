@@ -41,8 +41,13 @@ class LoadVJepaFeaturesFromH5:
 
     def _camera_from_path(self, path):
         path = str(path)
+        # nuScenes image paths typically look like:
+        #   .../samples/CAM_FRONT_LEFT/<filename>.jpg
+        # Avoid substring matching (e.g. "CAM_FRONT" in "CAM_FRONT_LEFT").
+        norm = path.replace('\\', '/')
+        parts = [p for p in norm.split('/') if p]
         for cam in CAMERAS:
-            if cam in path:
+            if cam in parts:
                 return cam
         return None
 

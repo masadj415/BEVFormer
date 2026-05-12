@@ -1,15 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=bev_ego_ft
-#SBATCH --time=06:00:00
+#SBATCH --time=12:00:00
 #SBATCH --account=cs-503
 #SBATCH --qos=cs-503
 #SBATCH --gres=gpu:2
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
-#SBATCH --output=/home/tlphan/cs503/BEVFormer/slurm_logs/%x_%j.out
-#SBATCH --error=/home/tlphan/cs503/BEVFormer/slurm_logs/%x_%j.err
+#SBATCH --output=/home/bourgois/Project/BEVFormer/slurm_logs/%x_%j.out
+#SBATCH --error=/home/bourgois/Project/BEVFormer/slurm_logs/%x_%j.err
 
 WANDB_KEY=$1
 
@@ -26,22 +26,22 @@ fi
 export WANDB_MODE=${WANDB_API_KEY:+online}
 export WANDB_MODE=${WANDB_MODE:-offline}
 
-source /home/tlphan/miniconda3/etc/profile.d/conda.sh
-conda activate /home/tlphan/miniconda3/envs/bev
+source /home/bourgois/miniconda3/etc/profile.d/conda.sh
+conda activate /home/bourgois/miniconda3/envs/bevdiffuser
 
-cd /home/tlphan/cs503/BEVFormer
+cd /home/bourgois/Project/BEVFormer
 export PYTHONPATH=$PWD:$PWD/tools:$PYTHONPATH
 
 CONFIG=projects/configs/bevformer/finetune_ego.py
-WORKDIR=/scratch/izar/tlphan/work_dirs/bevformer_ego_finetune
-PRETRAINED=/scratch/izar/tlphan/work_dirs/bevformer_small_map/latest.pth
+WORKDIR=/transfer/NaTaMaPa/bev_small_map
+PRETRAINED=/transfer/NaTaMaPa/bev_small_map/latest.pth
 
 if [ ! -f "$PRETRAINED" ]; then
   echo "ERROR: no checkpoint found at $PRETRAINED"
   exit 1
 fi
 
-mkdir -p /home/tlphan/cs503/BEVFormer/slurm_logs
+mkdir -p /home/bourgois/Project/BEVFormer/slurm_logs
 mkdir -p $WORKDIR
 
 RESUME_ARGS=""
@@ -50,6 +50,7 @@ if [ -f "$WORKDIR/latest.pth" ]; then
 else
   RESUME_ARGS="--load-from $PRETRAINED"
 fi
+# RESUME_ARGS="--load-from $PRETRAINED"
 
 srun bash -c "
   TORCHRUN_ARGS=\"--node_rank=\${SLURM_PROCID} \
