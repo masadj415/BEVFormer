@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=bev_small_map
+#SBATCH --job-name=bev_base_map_gdetr
 #SBATCH --time=12:00:00
 #SBATCH --account=cs-503
 #SBATCH --qos=cs-503
@@ -11,11 +11,11 @@
 #SBATCH --output=/home/tlphan/cs503/BEVFormer/slurm_logs/%x_%j.out
 #SBATCH --error=/home/tlphan/cs503/BEVFormer/slurm_logs/%x_%j.err
 
-WANDB_KEY=$1   # usage: sbatch run_small_map.sh <your_wandb_api_key>
+WANDB_KEY=$1   # usage: sbatch run_base_map_groupdetr.sh <your_wandb_api_key>
 
 set -x
 cat $0
-export MASTER_PORT=25678
+export MASTER_PORT=25681
 export MASTER_ADDR=$(hostname)
 export NCCL_DEBUG=INFO
 
@@ -33,15 +33,21 @@ conda activate /home/tlphan/miniconda3/envs/bev
 cd /home/tlphan/cs503/BEVFormer
 export PYTHONPATH=$PWD:$PWD/tools:$PYTHONPATH
 
-CONFIG=/home/tlphan/cs503/BEVFormer/projects/configs/bevformer/bevformer_small_map.py
-WORKDIR=/scratch/izar/tlphan/work_dirs/bevformer_small_map/11_May
+CONFIG=/home/tlphan/cs503/BEVFormer/projects/configs/bevformer/bevformer_base_map_groupdetr.py
+WORKDIR=/scratch/izar/tlphan/work_dirs/bevformer_base_map_groupdetr
+PREV_WORKDIR=/scratch/izar/tlphan/work_dirs/bevformer_base_map
 
 mkdir -p /home/tlphan/cs503/BEVFormer/slurm_logs
 mkdir -p $WORKDIR
 
+# Resume from GroupDETR workdir if already started, otherwise load from finished base run
 RESUME_ARGS=""
 if [ -f "$WORKDIR/latest.pth" ]; then
   RESUME_ARGS="--resume-from $WORKDIR/latest.pth"
+elif [ -f "$PREV_WORKDIR/latest.pth" ]; then
+  RESUME_ARGS="--load-from $PREV_WORKDIR/latest.pth"
+else
+  echo "WARNING: No checkpoint found in $PREV_WORKDIR — training from scratch"
 fi
 
 srun bash -c "

@@ -56,11 +56,17 @@ class LoadVJepaFeaturesFromH5:
     def _camera_from_path(self, path):
         path = str(path).replace("\\", "/")
         parts = path.split("/")
+<<<<<<< HEAD
 
         for part in parts:
             if part in CAMERAS:
                 return part
 
+=======
+        for part in parts:
+            if part in CAMERAS:
+                return part
+>>>>>>> 03a6b60 (Update: GroupDETR)
         return None
 
     def _reorder_to_metadata_camera_order(self, feat, results):
@@ -78,9 +84,12 @@ class LoadVJepaFeaturesFromH5:
         if any(cam is None for cam in meta_order):
             raise ValueError(f"Could not parse camera names from filenames: {filenames}")
 
+<<<<<<< HEAD
         if len(meta_order) != len(CAMERAS):
             raise ValueError(f"Expected {len(CAMERAS)} camera filenames, got {len(meta_order)}: {meta_order}")
 
+=======
+>>>>>>> 03a6b60 (Update: GroupDETR)
         if len(set(meta_order)) != len(CAMERAS):
             raise ValueError(f"Camera parsing produced duplicate/missing cameras: {meta_order}")
 

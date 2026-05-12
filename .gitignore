@@ -140,3 +140,4 @@ v1.0-mini.tgz
 
 wandb/
 slurm_logs/
+logs/
