@@ -60,11 +60,11 @@ model = dict(
     # V-JEPA cached feature settings.
     vjepa_in_dim=768,
     vjepa_out_dim=_dim_,
-    vjepa_h=23,
-    vjepa_w=41,
+    vjepa_h=28,
+    vjepa_w=50,
 
     # New temporal fusion.
-    vjepa_temporal_reduce='last',
+    vjepa_temporal_reduce='gated',
     vjepa_adapter_hidden_dim=512,
     vjepa_gate_hidden_dim=256,
 
@@ -214,10 +214,10 @@ file_client_args = dict(backend='disk')
 train_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_features_vitb_368x656_T4_rank0_of_1.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
         group='vitb',
-        img_w=656,
-        img_h=368,
+        img_w=800,
+        img_h=448,
         orig_w=1600,
         orig_h=900
     ),
@@ -248,16 +248,16 @@ train_pipeline = [
 test_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_features_vitb_368x656_T4_rank0_of_1.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
         group='vitb',
-        img_w=656,
-        img_h=368,
+        img_w=800,
+        img_h=448,
         orig_w=1600,
         orig_h=900
     ),
     dict(
         type='MultiScaleFlipAug3D',
-        img_scale=(656, 368),
+        img_scale=(800, 448),
         pts_scale_ratio=1,
         flip=False,
         transforms=[
@@ -276,7 +276,7 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=4,
-    workers_per_gpu=1,
+    workers_per_gpu=2,
 
     train=dict(
         type=dataset_type,
@@ -337,7 +337,7 @@ lr_config = dict(
     min_lr_ratio=1e-3
 )
 
-total_epochs = 30
+total_epochs = 13
 
 runner = dict(
     type='EpochBasedRunner',
@@ -361,7 +361,7 @@ log_config = dict(
             type='WandbLoggerHook',
             init_kwargs=dict(
                 project='bevformer-vjepa',
-                name='vjepa_bev200_enc6_gated_adapter512_368x656',
+                name='vjepa_bev_448x800_full_adapter',
                 dir='/mnt/vilab/scratch/masha/wandb',
                 config=dict(
                     model='BEVFormerVJepa',
@@ -370,7 +370,7 @@ log_config = dict(
                     adapter='768-512-512-256 conv3x3',
                     gate_hidden_dim=256,
                     samples_per_gpu=4,
-                    workers_per_gpu=1,
+                    workers_per_gpu=2,
                     queue_length=queue_length,
                     bev_h=bev_h_,
                     bev_w=bev_w_,
