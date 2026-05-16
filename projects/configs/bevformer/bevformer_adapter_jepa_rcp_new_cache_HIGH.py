@@ -64,7 +64,8 @@ model = dict(
     vjepa_w=50,
 
     # New temporal fusion.
-    vjepa_temporal_reduce='gated',
+    vjepa_temporal_reduce='last',
+    vjepa_adapter_num_blocks=6,
     vjepa_adapter_hidden_dim=512,
     vjepa_gate_hidden_dim=256,
 
@@ -337,7 +338,7 @@ lr_config = dict(
     min_lr_ratio=1e-3
 )
 
-total_epochs = 13
+total_epochs = 30
 
 runner = dict(
     type='EpochBasedRunner',
@@ -361,13 +362,13 @@ log_config = dict(
             type='WandbLoggerHook',
             init_kwargs=dict(
                 project='bevformer-vjepa',
-                name='vjepa_bev_448x800_full_adapter',
+                name='vjepa_bev_448x800_new_adapter_6blocks',
                 dir='/mnt/vilab/scratch/masha/wandb',
                 config=dict(
                     model='BEVFormerVJepa',
                     features='V-JEPA cached',
-                    temporal_reduce='gated',
-                    adapter='768-512-512-256 conv3x3',
+                    temporal_reduce='last',
+                    adapter='6 blocks, 512 hidden dim',
                     gate_hidden_dim=256,
                     samples_per_gpu=4,
                     workers_per_gpu=2,
