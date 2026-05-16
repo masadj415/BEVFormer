@@ -492,16 +492,15 @@ class BEVFormerVJepa(BEVFormer):
         gt_bboxes_ignore=None,
         img_depth=None,
         img_mask=None,
+        gt_masks_bev=None,
     ):
         """
         V-JEPA training path.
 
-        This still does not use BEVFormer prev_bev temporal memory.
-        Temporal fusion happens inside cached V-JEPA tokens when
-        vjepa_temporal_reduce='gated'.
+        No BEVFormer prev_bev temporal memory — temporal fusion happens
+        inside the cached V-JEPA tokens via the gated adapter.
         """
 
-        # If img_metas comes as queue metadata, keep only the current frame metadata.
         if isinstance(img_metas, list) and len(img_metas) > 0:
             if isinstance(img_metas[0], list):
                 img_metas = [each[-1] for each in img_metas]
@@ -509,18 +508,21 @@ class BEVFormerVJepa(BEVFormer):
                 img_metas = [each[max(each.keys())] for each in img_metas]
 
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
-
         losses = dict()
 
-        losses_pts = self.forward_pts_train(
-            img_feats,
-            gt_bboxes_3d,
-            gt_labels_3d,
-            img_metas,
-            gt_bboxes_ignore,
-            prev_bev=None,
-        )
-
+        outs = self.pts_bbox_head(img_feats, img_metas, prev_bev=None)
+        losses_pts = self.pts_bbox_head.loss(
+            gt_bboxes_3d, gt_labels_3d, outs, img_metas=img_metas)
         losses.update(losses_pts)
+
+        if self.map_seg_head is not None and gt_masks_bev is not None:
+            bev_embed = outs['bev_embed']           # (bev_h*bev_w, B, C)
+            B = bev_embed.shape[1]
+            bev_h = self.pts_bbox_head.bev_h
+            bev_w = self.pts_bbox_head.bev_w
+            bev_feat = bev_embed.permute(1, 2, 0).reshape(B, -1, bev_h, bev_w)
+            losses_seg = self.map_seg_head.forward_train(bev_feat, gt_masks_bev)
+            losses.update(losses_seg)
+
         return losses
     

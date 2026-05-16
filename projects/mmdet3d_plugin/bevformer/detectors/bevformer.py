@@ -7,6 +7,7 @@
 import torch
 from mmcv.runner import force_fp32, auto_fp16
 from mmdet.models import DETECTORS
+from mmdet.models.builder import build_head
 from mmdet3d.core import bbox3d2result
 from mmdet3d.models.detectors.mvx_two_stage import MVXTwoStageDetector
 from projects.mmdet3d_plugin.models.utils.grid_mask import GridMask
@@ -40,7 +41,8 @@ class BEVFormer(MVXTwoStageDetector):
                  train_cfg=None,
                  test_cfg=None,
                  pretrained=None,
-                 video_test_mode=False
+                 video_test_mode=False,
+                 map_seg_head=None,
                  ):
 
         super(BEVFormer,
@@ -62,6 +64,9 @@ class BEVFormer(MVXTwoStageDetector):
             'prev_pos': 0,
             'prev_angle': 0,
         }
+
+        # optional HD-map segmentation head (shares the BEV encoder output)
+        self.map_seg_head = build_head(map_seg_head) if map_seg_head is not None else None
 
 
     def extract_img_feat(self, img, img_metas, len_queue=None):
@@ -189,6 +194,7 @@ class BEVFormer(MVXTwoStageDetector):
                       gt_bboxes_ignore=None,
                       img_depth=None,
                       img_mask=None,
+                      gt_masks_bev=None,
                       ):
         """Forward training function.
         Args:
@@ -210,10 +216,13 @@ class BEVFormer(MVXTwoStageDetector):
                 used for training Fast RCNN. Defaults to None.
             gt_bboxes_ignore (list[torch.Tensor], optional): Ground truth
                 2D boxes in images to be ignored. Defaults to None.
+            gt_masks_bev (Tensor, optional): HD-map ground-truth masks of shape
+                (B, num_map_classes, bev_h, bev_w). Required when map_seg_head
+                is configured. Defaults to None.
         Returns:
             dict: Losses of different branches.
         """
-        
+
         len_queue = img.size(1)
         prev_img = img[:, :-1, ...]
         img = img[:, -1, ...]
@@ -226,11 +235,24 @@ class BEVFormer(MVXTwoStageDetector):
             prev_bev = None
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
         losses = dict()
-        losses_pts = self.forward_pts_train(img_feats, gt_bboxes_3d,
-                                            gt_labels_3d, img_metas,
-                                            gt_bboxes_ignore, prev_bev)
 
+        # Run detection head; capture outs so we can reuse bev_embed for
+        # the map segmentation head without a second encoder forward pass.
+        outs = self.pts_bbox_head(img_feats, img_metas, prev_bev)
+        losses_pts = self.pts_bbox_head.loss(
+            gt_bboxes_3d, gt_labels_3d, outs, img_metas=img_metas)
         losses.update(losses_pts)
+
+        # Map segmentation head (shares encoder output — zero extra cost)
+        if self.map_seg_head is not None and gt_masks_bev is not None:
+            bev_embed = outs['bev_embed']           # (bev_h*bev_w, B, C)
+            B = bev_embed.shape[1]
+            bev_h = self.pts_bbox_head.bev_h
+            bev_w = self.pts_bbox_head.bev_w
+            bev_feat = bev_embed.permute(1, 2, 0).reshape(B, -1, bev_h, bev_w)
+            losses_seg = self.map_seg_head.forward_train(bev_feat, gt_masks_bev)
+            losses.update(losses_seg)
+
         return losses
 
     def forward_test(self, img_metas, img=None, **kwargs):
@@ -278,6 +300,17 @@ class BEVFormer(MVXTwoStageDetector):
             bbox3d2result(bboxes, scores, labels)
             for bboxes, scores, labels in bbox_list
         ]
+
+        if self.map_seg_head is not None:
+            bev_embed = outs['bev_embed']  # (bev_h*bev_w, B, C)
+            B = bev_embed.shape[1]
+            bev_h = self.pts_bbox_head.bev_h
+            bev_w = self.pts_bbox_head.bev_w
+            bev_feat = bev_embed.permute(1, 2, 0).reshape(B, -1, bev_h, bev_w)
+            seg_preds = self.map_seg_head.get_seg_maps(bev_feat)  # (B, C, H, W)
+            for i, result in enumerate(bbox_results):
+                result['seg_preds'] = seg_preds[i].cpu().numpy()
+
         return outs['bev_embed'], bbox_results
 
     def simple_test(self, img_metas, img=None, prev_bev=None, rescale=False):

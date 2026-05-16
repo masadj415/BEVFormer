@@ -12,8 +12,8 @@ def normalize_bbox(bboxes, pc_range):
 
     rot = bboxes[..., 6:7]
     if bboxes.size(-1) > 7:
-        vx = bboxes[..., 7:8] 
-        vy = bboxes[..., 8:9]
+        vx = bboxes[..., 7:8] / 10
+        vy = bboxes[..., 8:9] / 10 
         normalized_bboxes = torch.cat(
             (cx, cy, w, l, cz, h, rot.sin(), rot.cos(), vx, vy), dim=-1
         )
@@ -45,9 +45,8 @@ def denormalize_bbox(normalized_bboxes, pc_range):
     h = h.exp() 
     if normalized_bboxes.size(-1) > 8:
          # velocity 
-        vx = normalized_bboxes[:, 8:9]
-        vy = normalized_bboxes[:, 9:10]
+        vx = normalized_bboxes[:, 8:9] * 10
+        vy = normalized_bboxes[:, 9:10] * 10
         denormalized_bboxes = torch.cat([cx, cy, cz, w, l, h, rot, vx, vy], dim=-1)
     else:
         denormalized_bboxes = torch.cat([cx, cy, cz, w, l, h, rot], dim=-1)
-    return denormalized_bboxes

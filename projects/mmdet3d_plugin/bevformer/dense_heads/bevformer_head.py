@@ -347,6 +347,11 @@ class BEVFormerHead(DETRHead):
                 a single decoder layer.
         """
         num_imgs = cls_scores.size(0)
+        # Guard: if every sample in the batch has 0 GT objects the CUDA focal
+        # loss kernel crashes on an empty tensor.  Return zero losses instead.
+        if all(gt.numel() == 0 for gt in gt_bboxes_list):
+            zero = cls_scores.sum() * 0
+            return zero, zero
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
         bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
         cls_reg_targets = self.get_targets(cls_scores_list, bbox_preds_list,
@@ -369,8 +374,11 @@ class BEVFormerHead(DETRHead):
                 cls_scores.new_tensor([cls_avg_factor]))
 
         cls_avg_factor = max(cls_avg_factor, 1)
-        loss_cls = self.loss_cls(
-            cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
+        if cls_scores.numel() == 0 or labels.numel() == 0:
+            loss_cls = cls_scores.sum() * 0
+        else:
+            loss_cls = self.loss_cls(
+                cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
 
         # Compute the average number of gt boxes accross all gpus, for
         # normalization purposes
@@ -383,10 +391,13 @@ class BEVFormerHead(DETRHead):
         isnotnan = torch.isfinite(normalized_bbox_targets).all(dim=-1)
         bbox_weights = bbox_weights * self.code_weights
 
-        loss_bbox = self.loss_bbox(
-            bbox_preds[isnotnan, :10], normalized_bbox_targets[isnotnan,
-                                                               :10], bbox_weights[isnotnan, :10],
-            avg_factor=num_total_pos)
+        if bbox_preds.numel() == 0:
+            loss_bbox = bbox_preds.sum() * 0
+        else:
+            loss_bbox = self.loss_bbox(
+                bbox_preds[isnotnan, :10], normalized_bbox_targets[isnotnan,
+                                                                   :10], bbox_weights[isnotnan, :10],
+                avg_factor=num_total_pos)
         if digit_version(TORCH_VERSION) >= digit_version('1.8'):
             loss_cls = torch.nan_to_num(loss_cls)
             loss_bbox = torch.nan_to_num(loss_bbox)

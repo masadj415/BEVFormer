@@ -8,6 +8,9 @@ from .datasets.pipelines import (
 from .models.utils import *
 from .models.opt.adamw import AdamW2
 from .bevformer import *
-from .dd3d import *
+try:
+    from .dd3d import *
+except ImportError:
+    pass
 
 from .core.hook.filtered_wandb_logger_hook import FilteredWandbLoggerHook
