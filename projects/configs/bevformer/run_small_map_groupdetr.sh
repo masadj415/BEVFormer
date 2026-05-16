@@ -34,8 +34,7 @@ cd /home/tlphan/cs503/BEVFormer
 export PYTHONPATH=$PWD:$PWD/tools:$PYTHONPATH
 
 CONFIG=/home/tlphan/cs503/BEVFormer/projects/configs/bevformer/bevformer_small_map_groupdetr.py
-WORKDIR=/scratch/izar/tlphan/work_dirs/bevformer_small_map_groupdetr
-PREV_WORKDIR=/scratch/izar/tlphan/work_dirs/bevformer_small_map/11_May
+WORKDIR=/scratch/izar/tlphan/work_dirs/bevformer_small_map_groupdetr/13_May
 
 mkdir -p /home/tlphan/cs503/BEVFormer/slurm_logs
 mkdir -p $WORKDIR
@@ -44,10 +43,8 @@ mkdir -p $WORKDIR
 RESUME_ARGS=""
 if [ -f "$WORKDIR/latest.pth" ]; then
   RESUME_ARGS="--resume-from $WORKDIR/latest.pth"
-elif [ -f "$PREV_WORKDIR/latest.pth" ]; then
-  RESUME_ARGS="--load-from $PREV_WORKDIR/latest.pth"
 else
-  echo "WARNING: No checkpoint found in $PREV_WORKDIR — training from scratch"
+  echo "WARNING: No checkpoint found in $WORKDIR — training from scratch"
 fi
 
 srun bash -c "

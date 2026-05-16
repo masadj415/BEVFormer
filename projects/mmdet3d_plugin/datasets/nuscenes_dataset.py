@@ -1,4 +1,5 @@
 import copy
+import os
 
 import numpy as np
 from mmdet.datasets import DATASETS
@@ -184,7 +185,7 @@ class CustomNuScenesDataset(NuScenesDataset):
 
     def evaluate(self, results, metric='bbox', logger=None, jsonfile_prefix=None,
                  result_names=['pts_bbox'], show=False, out_dir=None,
-                 pipeline=None):
+                 pipeline=None, seg_viz_dir=None, seg_num_viz=16):
         """Evaluate with both detection and segmentation metrics."""
         # Run the parent bbox evaluation
         result_dict = super().evaluate(
@@ -196,13 +197,15 @@ class CustomNuScenesDataset(NuScenesDataset):
         if results and isinstance(results[0], dict):
             first = results[0].get('pts_bbox', results[0])
             if 'seg_preds' in first:
-                seg_result = self._evaluate_seg(results, logger=logger)
+                seg_result = self._evaluate_seg(
+                    results, logger=logger,
+                    viz_dir=seg_viz_dir, num_viz=int(seg_num_viz))
                 result_dict.update(seg_result)
 
         return result_dict
 
-    def _evaluate_seg(self, results, iou_thr=0.5, logger=None):
-        """Compute per-class IoU for map segmentation."""
+    def _evaluate_seg(self, results, iou_thr=0.5, logger=None, viz_dir=None, num_viz=16):
+        """Compute per-class IoU for map segmentation, optionally saving GT vs Pred visualizations."""
         map_classes = [
             'drivable_area', 'ped_crossing', 'walkway',
             'stop_line', 'carpark_area', 'divider',
@@ -220,9 +223,24 @@ class CustomNuScenesDataset(NuScenesDataset):
             'carpark_area':  ['carpark_area'],
             'divider':       ['road_divider', 'lane_divider'],
         }
+        _CLASS_COLORS = [
+            (0,   180,   0),   # drivable_area  — green
+            (255, 160,   0),   # ped_crossing   — orange
+            (0,   200, 255),   # walkway        — cyan
+            (255,   0,   0),   # stop_line      — red
+            (180,   0, 255),   # carpark_area   — purple
+            (255, 255,   0),   # divider        — yellow
+        ]
         num_classes = len(map_classes)
         intersection = np.zeros(num_classes)
         union        = np.zeros(num_classes)
+
+        # Evenly-spaced indices to visualise across the full val set
+        viz_indices = set(
+            int(i) for i in np.linspace(0, len(results) - 1, num_viz)
+        ) if viz_dir is not None else set()
+        if viz_dir is not None:
+            os.makedirs(viz_dir, exist_ok=True)
 
         for i, res in enumerate(results):
             pred_raw = res.get('pts_bbox', res).get('seg_preds', None)
@@ -251,9 +269,9 @@ class CustomNuScenesDataset(NuScenesDataset):
             # Resize pred to GT resolution if needed
             if pred.shape[1:] != gt.shape[1:]:
                 import torch
-                import torch.nn.functional as F
-                pred_t = torch.from_numpy(pred).unsqueeze(0)  # (1, C, H, W)
-                pred_t = F.interpolate(pred_t, size=gt.shape[1:], mode='nearest')
+                import torch.nn.functional as _F
+                pred_t = torch.from_numpy(pred).unsqueeze(0)
+                pred_t = _F.interpolate(pred_t, size=gt.shape[1:], mode='nearest')
                 pred = pred_t.squeeze(0).numpy()
 
             for c in range(num_classes):
@@ -261,6 +279,10 @@ class CustomNuScenesDataset(NuScenesDataset):
                 g = gt[c].astype(bool)
                 intersection[c] += (p & g).sum()
                 union[c]        += (p | g).sum()
+
+            if i in viz_indices:
+                self._save_seg_viz(gt, pred, map_classes, _CLASS_COLORS,
+                                   osp.join(viz_dir, f'sample_{i:05d}.png'))
 
         iou_per_class = np.zeros(num_classes)
         for c in range(num_classes):
@@ -275,14 +297,62 @@ class CustomNuScenesDataset(NuScenesDataset):
         if logger is not None:
             mmcv.print_log(f'\nMap Segmentation mIoU: {miou:.4f}', logger)
             for c, name in enumerate(map_classes):
-                mmcv.print_log(
-                    f'  {name:20s}: {iou_per_class[c]:.4f}', logger)
+                mmcv.print_log(f'  {name:20s}: {iou_per_class[c]:.4f}', logger)
         else:
             print(f'\nMap Segmentation mIoU: {miou:.4f}')
             for c, name in enumerate(map_classes):
                 print(f'  {name:20s}: {iou_per_class[c]:.4f}')
 
         return seg_result
+
+    @staticmethod
+    def _save_seg_viz(gt, pred, class_names, colors, save_path):
+        """Save a side-by-side GT | Pred composite BEV image."""
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+
+        num_classes, H, W = gt.shape
+        fig, axes = plt.subplots(
+            num_classes + 1, 2,
+            figsize=(6, (num_classes + 1) * 2.2),
+            gridspec_kw={'hspace': 0.05, 'wspace': 0.02})
+
+        for c, name in enumerate(class_names):
+            r, g_ch, b = colors[c]
+            color_norm = (r / 255, g_ch / 255, b / 255)
+            for col, mask in enumerate([gt[c], pred[c]]):
+                ax = axes[c, col]
+                rgb = np.zeros((H, W, 3), dtype=np.float32)
+                rgb[mask.astype(bool)] = color_norm
+                ax.imshow(rgb, origin='lower', vmin=0, vmax=1)
+                ax.set_xticks([]); ax.set_yticks([])
+                if col == 0:
+                    ax.set_ylabel(name, fontsize=7, rotation=0,
+                                  labelpad=55, va='center')
+
+        # Composite overlay row
+        for col, masks in enumerate([gt, pred]):
+            ax = axes[num_classes, col]
+            composite = np.zeros((H, W, 3), dtype=np.float32)
+            for c in range(num_classes):
+                r, g_ch, b = colors[c]
+                m = masks[c].astype(bool)
+                composite[m, 0] = r / 255
+                composite[m, 1] = g_ch / 255
+                composite[m, 2] = b / 255
+            ax.imshow(composite, origin='lower')
+            ax.set_xticks([]); ax.set_yticks([])
+            ax.set_title('GT' if col == 0 else 'Pred', fontsize=9)
+
+        patches = [mpatches.Patch(color=tuple(c / 255 for c in colors[i]),
+                                  label=class_names[i])
+                   for i in range(num_classes)]
+        fig.legend(handles=patches, loc='lower center', ncol=3,
+                   fontsize=7, bbox_to_anchor=(0.5, -0.01))
+        plt.savefig(save_path, dpi=120, bbox_inches='tight')
+        plt.close(fig)
 
     def _evaluate_single(self,
                          result_path,

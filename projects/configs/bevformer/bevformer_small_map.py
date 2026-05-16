@@ -220,7 +220,7 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=1,
+    samples_per_gpu=4,
     workers_per_gpu=4,
     train=dict(
         type=dataset_type,
@@ -257,7 +257,7 @@ data = dict(
 
 optimizer = dict(
     type='AdamW',
-    lr=1.5e-4,
+    lr=2e-4,
     weight_decay=0.01)
 
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
@@ -266,8 +266,8 @@ lr_config = dict(
     by_epoch=False,
     warmup='linear',
     warmup_by_epoch=False,
-    warmup_iters=2000,       # was 500 → 4× longer
-    warmup_ratio=1.0 / 10,   # was 1/3 → start even lower
+    warmup_iters=2000,
+    warmup_ratio=1.0 / 10,
     min_lr_ratio=1e-3)
 total_epochs = 30
 evaluation = dict(interval=3, metric='bbox', pipeline=test_pipeline, start=1)

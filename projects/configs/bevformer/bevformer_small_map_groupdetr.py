@@ -37,7 +37,7 @@ bev_h_ = 150
 bev_w_ = 150
 queue_length = 1  # VJepa features carry their own temporal info
 
-group_detr = 11
+group_detr = 3
 
 # V-JEPA token grid (must match the h5 extraction resolution)
 # h5 stores (6, T*vjepa_h_*vjepa_w_, 768) per sample
@@ -47,7 +47,7 @@ vjepa_w_ = 41
 vjepa_feat_h = vjepa_h_ * 16   # 368 — used to scale camera intrinsics
 vjepa_feat_w = vjepa_w_ * 16   # 656 — used to scale camera intrinsics
 
-vjepa_h5_path = '/transfer/NaTaMaPa/train_features_vitb_368x656_T4_rank0_of_1.h5'
+vjepa_h5_path = '/transfer/NaTaMaPa/train_features_vitb_368x656_T4_rank0_of_1_FIXED.h5'
 train_ann_file = '/transfer/NaTaMaPa/nuscenes_metadata/nuscenes_infos_temporal_train_with_map_150.pkl'
 val_ann_file   = '/transfer/NaTaMaPa/nuscenes_metadata/nuscenes_infos_temporal_val_with_map_150.pkl'
 
@@ -214,7 +214,7 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=1,
+    samples_per_gpu=4,
     workers_per_gpu=4,
     train=dict(
         type=dataset_type,
@@ -251,7 +251,7 @@ data = dict(
 
 optimizer = dict(
     type='AdamW',
-    lr=1.5e-4,
+    lr=2e-4,
     weight_decay=0.01)
 
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
@@ -263,7 +263,7 @@ lr_config = dict(
     warmup_iters=2000,
     warmup_ratio=1.0 / 10,
     min_lr_ratio=1e-3)
-total_epochs = 24
+total_epochs = 30
 evaluation = dict(interval=3, metric='bbox', pipeline=test_pipeline, start=1)
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
