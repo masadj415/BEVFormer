@@ -197,7 +197,10 @@ class LoadMapMaskFromNpz:
             results['gt_masks_bev'] = DC(
                 torch.from_numpy(gt_masks), cpu_only=False, stack=True)
             return results
-
+        npz_path = npz_path.replace(
+            '/transfer/NaTaMaPa/nuscenes_trainval',
+            '/mnt/vilab/scratch/masha/nuscenes_trainval'
+        )
         raw = np.load(npz_path)['arr_0'].astype(np.float32)  # (10, H, W)
         _, H, W = raw.shape
 
