@@ -60,11 +60,11 @@ model = dict(
     # V-JEPA cached feature settings.
     vjepa_in_dim=768,
     vjepa_out_dim=_dim_,
-    vjepa_h=14,
-    vjepa_w=24,
+    vjepa_h=23,
+    vjepa_w=41,
 
     # New temporal fusion.
-    vjepa_temporal_reduce='gated',
+    vjepa_temporal_reduce='last',
     vjepa_adapter_hidden_dim=512,
     vjepa_gate_hidden_dim=256,
 
@@ -214,10 +214,10 @@ file_client_args = dict(backend='disk')
 train_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/features_vitb_224x384_T4_final.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_features_vitb_368x656_T4_rank0_of_1.h5',
         group='vitb',
-        img_w=384,
-        img_h=224,
+        img_w=656,
+        img_h=368,
         orig_w=1600,
         orig_h=900
     ),
@@ -248,16 +248,16 @@ train_pipeline = [
 test_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/features_vitb_224x384_T4_final.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_features_vitb_368x656_T4_rank0_of_1.h5',
         group='vitb',
-        img_w=384,
-        img_h=224,
+        img_w=656,
+        img_h=368,
         orig_w=1600,
         orig_h=900
     ),
     dict(
         type='MultiScaleFlipAug3D',
-        img_scale=(384, 224),
+        img_scale=(656, 368),
         pts_scale_ratio=1,
         flip=False,
         transforms=[
@@ -275,8 +275,8 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=8,
-    workers_per_gpu=0,
+    samples_per_gpu=4,
+    workers_per_gpu=1,
 
     train=dict(
         type=dataset_type,
@@ -347,7 +347,9 @@ runner = dict(
 evaluation = dict(
     interval=3,
     metric='bbox',
-    pipeline=test_pipeline
+    pipeline=test_pipeline,
+    save_best='pts_bbox_NuScenes/NDS',
+    rule='greater'
 )
 
 
@@ -356,11 +358,10 @@ log_config = dict(
     hooks=[
         dict(type='TextLoggerHook'),
         dict(
-            type='FilteredWandbLoggerHook',
-            keep_train=True,
+            type='WandbLoggerHook',
             init_kwargs=dict(
                 project='bevformer-vjepa',
-                name='vjepa_bev200_enc6_gated_adapter512_bs12_w0',
+                name='vjepa_bev200_enc6_gated_adapter512_368x656',
                 dir='/mnt/vilab/scratch/masha/wandb',
                 config=dict(
                     model='BEVFormerVJepa',
@@ -368,8 +369,8 @@ log_config = dict(
                     temporal_reduce='gated',
                     adapter='768-512-512-256 conv3x3',
                     gate_hidden_dim=256,
-                    samples_per_gpu=8,
-                    workers_per_gpu=0,
+                    samples_per_gpu=4,
+                    workers_per_gpu=1,
                     queue_length=queue_length,
                     bev_h=bev_h_,
                     bev_w=bev_w_,

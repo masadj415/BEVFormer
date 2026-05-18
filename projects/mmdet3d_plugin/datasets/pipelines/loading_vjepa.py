@@ -1,3 +1,6 @@
+import os
+os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
+
 import h5py
 import numpy as np
 from mmdet.datasets.builder import PIPELINES
@@ -19,17 +22,28 @@ class LoadVJepaFeaturesFromH5:
     """
 
     def __init__(self, h5_path, group="vitb", img_w=384, img_h=224, orig_w=1600, orig_h=900):
-        self.h5_path = h5_path
+        self.h5_path = str(h5_path)
         self.group = group
         self.img_w = img_w
         self.img_h = img_h
         self.orig_w = orig_w
         self.orig_h = orig_h
         self._h5 = None
+        self._h5_pid = None
 
     def _get_h5(self):
-        if self._h5 is None:
-            self._h5 = h5py.File(self.h5_path, "r")
+        pid = os.getpid()
+
+        if self._h5 is None or self._h5_pid != pid:
+            if self._h5 is not None:
+                try:
+                    self._h5.close()
+                except Exception:
+                    pass
+
+            self._h5 = h5py.File(self.h5_path, "r", swmr=True)
+            self._h5_pid = pid
+
         return self._h5
 
     def _get_sample_token(self, results):
@@ -40,10 +54,13 @@ class LoadVJepaFeaturesFromH5:
         raise KeyError(f"Cannot find sample token. Available keys: {list(results.keys())}")
 
     def _camera_from_path(self, path):
-        path = str(path)
-        for cam in CAMERAS:
-            if cam in path:
-                return cam
+        path = str(path).replace("\\", "/")
+        parts = path.split("/")
+
+        for part in parts:
+            if part in CAMERAS:
+                return part
+
         return None
 
     def _reorder_to_metadata_camera_order(self, feat, results):
@@ -54,14 +71,26 @@ class LoadVJepaFeaturesFromH5:
         """
         filenames = results.get("img_filename", None)
         if filenames is None:
-            return feat
+            raise KeyError("Missing img_filename, cannot align V-JEPA features with camera metadata.")
 
         meta_order = [self._camera_from_path(p) for p in filenames]
+
         if any(cam is None for cam in meta_order):
-            return feat
+            raise ValueError(f"Could not parse camera names from filenames: {filenames}")
+
+        if len(meta_order) != len(CAMERAS):
+            raise ValueError(f"Expected {len(CAMERAS)} camera filenames, got {len(meta_order)}: {meta_order}")
+
+        if len(set(meta_order)) != len(CAMERAS):
+            raise ValueError(f"Camera parsing produced duplicate/missing cameras: {meta_order}")
 
         perm = [CAMERAS.index(cam) for cam in meta_order]
+
+        if sorted(perm) != list(range(len(CAMERAS))):
+            raise ValueError(f"Invalid camera permutation: perm={perm}, meta_order={meta_order}")
+
         return feat[perm]
+
     def _scale_geometry_to_vjepa_resolution(self, results):
         sx = self.img_w / self.orig_w
         sy = self.img_h / self.orig_h
