@@ -8,53 +8,6 @@ from mmdet3d.core import bbox3d2result
 
 from .bevformer import BEVFormer
 from projects.mmdet3d_plugin.core.bbox.util import denormalize_bbox
-# class VJepaAdapter(nn.Module):
-#     """
-#     Stronger adapter from cached V-JEPA dense tokens to BEVFormer image-feature format.
-
-#     Input:
-#         x: [B, num_cams, 768, 14, 24]
-
-#     Output:
-#         x: [B, num_cams, 256, 14, 24]
-
-#     Difference from the old adapter:
-#         old: 768 -> 256 using 1x1 conv
-#         new: 768 -> 512 -> 512 -> 256 using 3x3 convs
-
-#     The 3x3 convolutions allow neighboring V-JEPA tokens on the 14x24 grid
-#     to exchange local spatial information before BEVFormer cross-attention.
-#     """
-
-#     def __init__(self, in_dim=768, out_dim=256, hidden_dim=512, num_groups=32):
-#         super().__init__()
-
-#         self.proj = nn.Sequential(
-#             nn.Conv2d(in_dim, hidden_dim, kernel_size=3, padding=1, bias=True),
-#             nn.GroupNorm(num_groups, hidden_dim),
-#             nn.ReLU(inplace=True),
-
-#             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, bias=True),
-#             nn.GroupNorm(num_groups, hidden_dim),
-#             nn.ReLU(inplace=True),
-
-#             nn.Conv2d(hidden_dim, out_dim, kernel_size=3, padding=1, bias=True),
-#             nn.GroupNorm(num_groups, out_dim),
-#             nn.ReLU(inplace=True),
-#         )
-
-#     def forward(self, x):
-#         # x: [B, num_cams, C, H, W]
-#         B, N, C, H, W = x.shape
-
-#         x = x.reshape(B * N, C, H, W)
-
-#         # Cached V-JEPA features are float16, but adapter is safer in fp32.
-#         x = x.float()
-#         x = self.proj(x)
-
-#         x = x.reshape(B, N, -1, H, W)
-#         return x
     
 class ResidualConvBlock(nn.Module):
     """
@@ -382,6 +335,56 @@ class BEVFormerVJepa(BEVFormer):
     def extract_feat(self, img, img_metas=None, len_queue=None):
         return self.extract_img_feat(img, img_metas, len_queue=len_queue)
 
+    @torch.no_grad()
+    def obtain_history_bev(self, imgs_queue, img_metas_list):
+        """
+        Build previous BEV features from queued V-JEPA cached features.
+
+        imgs_queue:
+            [B, len_queue, 6, tokens, 768]
+
+        img_metas_list:
+            list over batch, each element is list of metadata over queue
+
+        Returns:
+            prev_bev from the last history frame
+        """
+        self.eval()
+
+        prev_bev = None
+        bs, len_queue = imgs_queue.shape[:2]
+
+        for i in range(len_queue):
+            img = imgs_queue[:, i, ...]  # [B, 6, tokens, 768]
+
+            # Metadata for the i-th frame in the queue
+            if isinstance(img_metas_list[0], list):
+                img_metas = [each[i] for each in img_metas_list]
+            elif isinstance(img_metas_list[0], dict) and i in img_metas_list[0]:
+                img_metas = [each[i] for each in img_metas_list]
+            else:
+                raise ValueError(
+                    "Expected img_metas to contain queue metadata, but got "
+                    f"type={type(img_metas_list[0])}"
+                )
+
+            # Reset temporal memory at scene boundary
+            if not img_metas[0].get("prev_bev_exists", True):
+                prev_bev = None
+
+            img_feats = self.extract_feat(img=img, img_metas=img_metas)
+
+            prev_bev = self.pts_bbox_head(
+                img_feats,
+                img_metas,
+                prev_bev=prev_bev,
+                only_bev=True,
+            )
+
+        self.train()
+        return prev_bev
+    
+
     def forward_pts_train(
         self,
         pts_feats,
@@ -410,13 +413,13 @@ class BEVFormerVJepa(BEVFormer):
             gt_bboxes_3d, gt_labels_3d, outs, img_metas=img_metas
         )
 
-        # ── Track 1: Ego Trajectory Head ────────────────────────────────────
+        # Ego Trajectory Head ────────────────────────────────────
         if self.ego_trajectory_head is not None and gt_future_ego is not None:
             bev_embed = outs['bev_embed']          # [B, H*W, C]
             ego_wp = self.ego_trajectory_head(bev_embed, img_metas)
             losses.update(self.ego_trajectory_head.loss(ego_wp, gt_future_ego))
 
-        # ── Track 2: Agent Motion Head ───────────────────────────────────────
+        # Agent Motion Head ───────────────────────────────────────
         if (
             self.motion_head is not None
             and gt_fut_traj is not None
@@ -430,10 +433,16 @@ class BEVFormerVJepa(BEVFormer):
                 pos_inds, pos_gt_inds = self.pts_bbox_head.get_motion_matching(
                     last_cls, last_bbox, gt_bboxes_3d, gt_labels_3d
                 )
-                # Extract vx, vy (cols 7:8) from GT boxes — [N, 2] per batch item.
-                gt_velocities = [
-                    boxes.tensor[:, 7:9] for boxes in gt_bboxes_3d
-                ]
+                # Extract vx, vy from GT boxes if present; otherwise use zeros.
+                # Some pipelines keep boxes as 7D and store velocity elsewhere,
+                # so this avoids crashing when the tensor has no velocity columns.
+                gt_velocities = []
+                for boxes in gt_bboxes_3d:
+                    box_tensor = boxes.tensor
+                    if box_tensor.size(-1) >= 9:
+                        gt_velocities.append(box_tensor[:, 7:9])
+                    else:
+                        gt_velocities.append(box_tensor.new_zeros((box_tensor.size(0), 2)))
                 losses.update(
                     self.motion_head.loss(
                         motion_preds,
@@ -466,21 +475,65 @@ class BEVFormerVJepa(BEVFormer):
         gt_fut_traj_mask=None,
     ):
         """
-        V-JEPA training path.
+        V-JEPA temporal training path with optional auxiliary heads.
 
-        Temporal fusion happens inside cached V-JEPA tokens when
-        vjepa_temporal_reduce='gated'.  prev_bev is not used here; temporal
-        context flows through the V-JEPA adapter.
+        If img has queue dimension:
+            img: [B, queue_length, 6, tokens, 768]
+
+        Then:
+            previous frames -> obtain_history_bev -> prev_bev
+            current frame + prev_bev -> detection / auxiliary losses
         """
 
-        # If img_metas comes as queue metadata, keep only the current frame metadata.
-        if isinstance(img_metas, list) and len(img_metas) > 0:
-            if isinstance(img_metas[0], list):
-                img_metas = [each[-1] for each in img_metas]
-            elif isinstance(img_metas[0], dict) and 0 in img_metas[0]:
-                img_metas = [each[max(each.keys())] for each in img_metas]
+        prev_bev = None
 
-        img_feats = self.extract_feat(img=img, img_metas=img_metas)
+        # True BEVFormer temporal training path.
+        if img is not None and img.dim() == 5 and img.size(1) > 1:
+            len_queue = img.size(1)
+
+            prev_img = img[:, :-1, ...]   # [B, queue-1, 6, tokens, 768]
+            curr_img = img[:, -1, ...]    # [B, 6, tokens, 768]
+
+            # Split metadata into previous-frame metadata and current-frame metadata.
+            if isinstance(img_metas, list) and len(img_metas) > 0:
+                if isinstance(img_metas[0], list):
+                    prev_img_metas = [each[:-1] for each in img_metas]
+                    curr_img_metas = [each[-1] for each in img_metas]
+
+                elif isinstance(img_metas[0], dict) and 0 in img_metas[0]:
+                    prev_img_metas = [
+                        [each[i] for i in range(len_queue - 1)]
+                        for each in img_metas
+                    ]
+                    curr_img_metas = [each[len_queue - 1] for each in img_metas]
+
+                else:
+                    raise ValueError(
+                        "img has queue dimension, but img_metas does not look like queue metadata."
+                    )
+            else:
+                raise ValueError("img has queue dimension, but img_metas is missing.")
+
+            # Build history BEV from previous frames.
+            prev_bev = self.obtain_history_bev(prev_img, prev_img_metas)
+
+            # Reset prev_bev at scene boundary.
+            if not curr_img_metas[0].get("prev_bev_exists", True):
+                prev_bev = None
+
+            img_metas = curr_img_metas
+            img_feats = self.extract_feat(img=curr_img, img_metas=img_metas)
+
+        else:
+            # Single-frame fallback.
+            if isinstance(img_metas, list) and len(img_metas) > 0:
+                if isinstance(img_metas[0], list):
+                    img_metas = [each[-1] for each in img_metas]
+                elif isinstance(img_metas[0], dict) and 0 in img_metas[0]:
+                    img_metas = [each[max(each.keys())] for each in img_metas]
+
+            img_feats = self.extract_feat(img=img, img_metas=img_metas)
+            prev_bev = None
 
         losses = self.forward_pts_train(
             img_feats,
@@ -491,7 +544,7 @@ class BEVFormerVJepa(BEVFormer):
             gt_future_ego=gt_future_ego,
             gt_fut_traj=gt_fut_traj,
             gt_fut_traj_mask=gt_fut_traj_mask,
-            prev_bev=None,
+            prev_bev=prev_bev,
         )
 
         return losses
@@ -514,7 +567,7 @@ class BEVFormerVJepa(BEVFormer):
             for bboxes, scores, labels in bbox_list
         ]
 
-        # ── Ego trajectory ────────────────────────────────────────────────────
+        # Ego trajectory 
         if self.ego_trajectory_head is not None:
             bev_embed = outs['bev_embed']
             if bev_embed.shape[0] != len(img_metas):
@@ -523,7 +576,7 @@ class BEVFormerVJepa(BEVFormer):
             for i, rd in enumerate(bbox_results):
                 rd['ego_waypoints'] = ego_wp[i].cpu().numpy()
 
-        # ── Agent motion ──────────────────────────────────────────────────────
+        # Agent motion 
         if self.motion_head is not None:
             query_feats = outs.get('query_feats')
             if query_feats is not None:
