@@ -367,7 +367,55 @@ class BEVFormerVJepa(BEVFormer):
     @auto_fp16(apply_to=("img",))
     def extract_feat(self, img, img_metas=None, len_queue=None):
         return self.extract_img_feat(img, img_metas, len_queue=len_queue)
+    @torch.no_grad()
+    def obtain_history_bev(self, imgs_queue, img_metas_list):
+        """
+        Build previous BEV features from queued V-JEPA cached features.
 
+        imgs_queue:
+            [B, len_queue, 6, tokens, 768]
+
+        img_metas_list:
+            list over batch, each element is list of metadata over queue
+
+        Returns:
+            prev_bev from the last history frame
+        """
+        self.eval()
+
+        prev_bev = None
+        bs, len_queue = imgs_queue.shape[:2]
+
+        for i in range(len_queue):
+            img = imgs_queue[:, i, ...]  # [B, 6, tokens, 768]
+
+            # Metadata for the i-th frame in the queue
+            if isinstance(img_metas_list[0], list):
+                img_metas = [each[i] for each in img_metas_list]
+            elif isinstance(img_metas_list[0], dict) and i in img_metas_list[0]:
+                img_metas = [each[i] for each in img_metas_list]
+            else:
+                raise ValueError(
+                    "Expected img_metas to contain queue metadata, but got "
+                    f"type={type(img_metas_list[0])}"
+                )
+
+            # Reset temporal memory at scene boundary
+            if not img_metas[0].get("prev_bev_exists", True):
+                prev_bev = None
+
+            img_feats = self.extract_feat(img=img, img_metas=img_metas)
+
+            prev_bev = self.pts_bbox_head(
+                img_feats,
+                img_metas,
+                prev_bev=prev_bev,
+                only_bev=True,
+            )
+
+        self.train()
+        return prev_bev
+    
     @auto_fp16(apply_to=("img", "points"))
     def forward_train(
         self,
@@ -384,21 +432,65 @@ class BEVFormerVJepa(BEVFormer):
         img_mask=None,
     ):
         """
-        V-JEPA training path.
+        V-JEPA temporal training path.
 
-        This still does not use BEVFormer prev_bev temporal memory.
-        Temporal fusion happens inside cached V-JEPA tokens when
-        vjepa_temporal_reduce='gated'.
+        If img has queue dimension:
+            img: [B, queue_length, 6, tokens, 768]
+
+        Then:
+            previous frames -> obtain_history_bev -> prev_bev
+            current frame + prev_bev -> detection loss
         """
 
-        # If img_metas comes as queue metadata, keep only the current frame metadata.
-        if isinstance(img_metas, list) and len(img_metas) > 0:
-            if isinstance(img_metas[0], list):
-                img_metas = [each[-1] for each in img_metas]
-            elif isinstance(img_metas[0], dict) and 0 in img_metas[0]:
-                img_metas = [each[max(each.keys())] for each in img_metas]
+        prev_bev = None
 
-        img_feats = self.extract_feat(img=img, img_metas=img_metas)
+        # True BEVFormer temporal training path
+        if img is not None and img.dim() == 5 and img.size(1) > 1:
+            len_queue = img.size(1)
+
+            prev_img = img[:, :-1, ...]   # [B, queue-1, 6, tokens, 768]
+            curr_img = img[:, -1, ...]    # [B, 6, tokens, 768]
+
+            # Split metadata into previous-frame metadata and current-frame metadata
+            if isinstance(img_metas, list) and len(img_metas) > 0:
+                if isinstance(img_metas[0], list):
+                    prev_img_metas = [each[:-1] for each in img_metas]
+                    curr_img_metas = [each[-1] for each in img_metas]
+
+                elif isinstance(img_metas[0], dict) and 0 in img_metas[0]:
+                    prev_img_metas = [
+                        [each[i] for i in range(len_queue - 1)]
+                        for each in img_metas
+                    ]
+                    curr_img_metas = [each[len_queue - 1] for each in img_metas]
+
+                else:
+                    raise ValueError(
+                        "img has queue dimension, but img_metas does not look like queue metadata."
+                    )
+            else:
+                raise ValueError("img has queue dimension, but img_metas is missing.")
+
+            # Build history BEV from previous frames
+            prev_bev = self.obtain_history_bev(prev_img, prev_img_metas)
+
+            # Reset prev_bev at scene boundary
+            if not curr_img_metas[0].get("prev_bev_exists", True):
+                prev_bev = None
+
+            img_metas = curr_img_metas
+            img_feats = self.extract_feat(img=curr_img, img_metas=img_metas)
+
+        else:
+            # Single-frame fallback
+            if isinstance(img_metas, list) and len(img_metas) > 0:
+                if isinstance(img_metas[0], list):
+                    img_metas = [each[-1] for each in img_metas]
+                elif isinstance(img_metas[0], dict) and 0 in img_metas[0]:
+                    img_metas = [each[max(each.keys())] for each in img_metas]
+
+            img_feats = self.extract_feat(img=img, img_metas=img_metas)
+            prev_bev = None
 
         losses = dict()
 
@@ -408,9 +500,8 @@ class BEVFormerVJepa(BEVFormer):
             gt_labels_3d,
             img_metas,
             gt_bboxes_ignore,
-            prev_bev=None,
+            prev_bev=prev_bev,
         )
 
         losses.update(losses_pts)
         return losses
-    

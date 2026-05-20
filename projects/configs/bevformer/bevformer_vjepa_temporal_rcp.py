@@ -60,8 +60,8 @@ model = dict(
     # V-JEPA cached feature settings.
     vjepa_in_dim=768,
     vjepa_out_dim=_dim_,
-    vjepa_h=28,
-    vjepa_w=50,
+    vjepa_h=56,
+    vjepa_w=100,
 
     # New temporal fusion.
     vjepa_temporal_reduce='last',
@@ -215,10 +215,10 @@ file_client_args = dict(backend='disk')
 train_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_2x896x1600.h5',
         group='vitb',
-        img_w=800,
-        img_h=448,
+        img_w=1600,
+        img_h=896,
         orig_w=1600,
         orig_h=900
     ),
@@ -249,16 +249,16 @@ train_pipeline = [
 test_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_2x896x1600.h5',
         group='vitb',
-        img_w=800,
-        img_h=448,
+        img_w=1600,
+        img_h=896,
         orig_w=1600,
         orig_h=900
     ),
     dict(
         type='MultiScaleFlipAug3D',
-        img_scale=(800, 448),
+        img_scale=(1600, 896),
         pts_scale_ratio=1,
         flip=False,
         transforms=[
@@ -277,7 +277,7 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=4,
-    workers_per_gpu=2,
+    workers_per_gpu=8,
 
     train=dict(
         type=dataset_type,
@@ -362,7 +362,7 @@ log_config = dict(
             type='WandbLoggerHook',
             init_kwargs=dict(
                 project='bevformer-vjepa',
-                name='vjepa_bev_448x800_temporal_bev_q4_rcp',
+                name='vjepa_bev_896x1600_temporal_bev_4_new_res',
                 dir='/mnt/vilab/scratch/masha/wandb',
                 config=dict(
                     model='BEVFormerVJepa',
@@ -371,7 +371,7 @@ log_config = dict(
                     adapter='4 blocks, 512 hidden dim',
                     gate_hidden_dim=256,
                     samples_per_gpu=4,
-                    workers_per_gpu=2,
+                    workers_per_gpu=8,
                     queue_length=queue_length,
                     bev_h=bev_h_,
                     bev_w=bev_w_,
