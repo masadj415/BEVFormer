@@ -206,11 +206,49 @@ class BEVFormerHead(DETRHead):
             'bev_embed': bev_embed,
             'all_cls_scores': outputs_classes,
             'all_bbox_preds': outputs_coords,
+            # Last decoder layer features: used by MotionHead
+            'query_feats': hs[-1],    # [bs, num_query, embed_dims]
             'enc_cls_scores': None,
             'enc_bbox_preds': None,
         }
 
         return outs
+
+    def get_motion_matching(self, cls_scores, bbox_preds, gt_bboxes_3d, gt_labels_3d):
+        """
+        Re-run Hungarian matching for the last decoder layer and return per-
+        batch matched query / GT-box index pairs.  Called from BEVFormerVJepa
+        to supply supervision indices to MotionHead.
+
+        Args:
+            cls_scores:   [B, num_query, num_classes]  (last decoder layer)
+            bbox_preds:   [B, num_query, code_size]    (last decoder layer)
+            gt_bboxes_3d: list[BaseInstance3DBoxes]    length B
+            gt_labels_3d: list[Tensor]                 length B
+
+        Returns:
+            pos_inds_list:    list[Tensor]  — matched query indices per image
+            pos_gt_inds_list: list[Tensor]  — corresponding GT box indices
+        """
+        device = gt_labels_3d[0].device
+        gt_bboxes_list = [
+            torch.cat((g.gravity_center, g.tensor[:, 3:]), dim=1).to(device)
+            for g in gt_bboxes_3d
+        ]
+
+        pos_inds_list, pos_gt_inds_list = [], []
+        for i in range(len(gt_bboxes_list)):
+            assign_result = self.assigner.assign(
+                bbox_preds[i], cls_scores[i],
+                gt_bboxes_list[i], gt_labels_3d[i], None
+            )
+            sampling_result = self.sampler.sample(
+                assign_result, bbox_preds[i], gt_bboxes_list[i]
+            )
+            pos_inds_list.append(sampling_result.pos_inds)
+            pos_gt_inds_list.append(sampling_result.pos_assigned_gt_inds)
+
+        return pos_inds_list, pos_gt_inds_list
 
     def _get_target_single(self,
                            cls_score,

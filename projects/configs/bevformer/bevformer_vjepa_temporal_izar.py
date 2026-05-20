@@ -69,6 +69,34 @@ model = dict(
     vjepa_adapter_hidden_dim=512,
     vjepa_gate_hidden_dim=256,
 
+    # Track 1: Ego trajectory head.
+    # Predicts 6 future ego waypoints (3 s at 0.5 s/step) in current ego frame.
+    # Initialized from canbus (speed/yaw prior) + 2-layer BEV cross-attention.
+    # Start weight at 0.1; ramp toward 0.5 after ~10 k iters if loss is stable.
+    ego_trajectory_head=dict(
+        type='EgoTrajectoryHead',
+        embed_dims=_dim_,
+        num_waypoints=6,
+        canbus_dim=18,
+        num_decoder_layers=2,
+        num_heads=8,
+        dropout=0.1,
+        loss_weight=0.5,
+    ),
+
+    # Track 2: Per-agent motion head.
+    # Piggybacks on the 900 DETR detection queries (no new queries).
+    # GT is real future positions from the motion pkl (not velocity extrapolation).
+    # Only moving agents (|v| > 0.5 m/s) contribute to the loss to avoid the
+    # stationary-agent majority trivially driving the loss to zero.
+    motion_head=dict(
+        type='MotionHead',
+        embed_dims=_dim_,
+        num_waypoints=6,
+        future_dt=0.5,
+        loss_weight=0.25,
+    ),
+
     img_backbone=None,
     img_neck=None,
 
@@ -210,6 +238,8 @@ model = dict(
 
 dataset_type = 'CustomNuScenesDataset'
 data_root = '/scratch/izar/mduric/nuscenes_trainval/'
+motion_ann_file = '/transfer/NaTaMaPa/nuscenes_metadata/nuscenes_infos_temporal_train_with_map_200_motion.pkl'
+val_ann_file = '/transfer/NaTaMaPa/nuscenes_metadata/nuscenes_infos_temporal_val_with_map_200_motion.pkl'
 file_client_args = dict(backend='disk')
 
 train_pipeline = [
@@ -228,12 +258,14 @@ train_pipeline = [
         with_label_3d=True,
         with_attr_label=False
     ),
+    # Trajectory-aware versions keep gt_fut_traj / gt_fut_traj_mask in sync
+    # with gt_bboxes_3d through each filter step.
     dict(
-        type='ObjectRangeFilter',
+        type='ObjectRangeFilterWithTraj',
         point_cloud_range=point_cloud_range
     ),
     dict(
-        type='ObjectNameFilter',
+        type='ObjectNameFilterWithTraj',
         classes=class_names
     ),
     dict(
@@ -242,7 +274,8 @@ train_pipeline = [
     ),
     dict(
         type='CustomCollect3D',
-        keys=['gt_bboxes_3d', 'gt_labels_3d', 'img']
+        keys=['gt_bboxes_3d', 'gt_labels_3d', 'img',
+              'gt_future_ego', 'gt_fut_traj', 'gt_fut_traj_mask']
     )
 ]
 
@@ -282,7 +315,7 @@ data = dict(
     train=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_infos_temporal_train.pkl',
+        ann_file=motion_ann_file,
         pipeline=train_pipeline,
         classes=class_names,
         modality=input_modality,
@@ -296,7 +329,7 @@ data = dict(
     val=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
+        ann_file=val_ann_file,
         pipeline=test_pipeline,
         bev_size=(bev_h_, bev_w_),
         classes=class_names,
@@ -307,7 +340,7 @@ data = dict(
     test=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
+        ann_file=val_ann_file,
         pipeline=test_pipeline,
         bev_size=(bev_h_, bev_w_),
         classes=class_names,
@@ -363,7 +396,7 @@ log_config = dict(
             init_kwargs=dict(
                 project='bevformer-vjepa',
                 name='vjepa_bev_448x800_temporal_bev_4_with_our_best_adapter',
-                dir='/scratch/izar/mduric/wandb',
+                dir='/scratch/izar/tlphan/wandb',
                 config=dict(
                     model='BEVFormerVJepa',
                     features='V-JEPA cached',

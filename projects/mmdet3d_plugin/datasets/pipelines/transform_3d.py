@@ -3,6 +3,9 @@ from numpy import random
 import mmcv
 from mmdet.datasets.builder import PIPELINES
 from mmcv.parallel import DataContainer as DC
+from mmdet3d.datasets.pipelines import ObjectRangeFilter as _ObjectRangeFilter
+from mmdet3d.datasets.pipelines import ObjectNameFilter as _ObjectNameFilter
+from mmdet3d.core.bbox import LiDARInstance3DBoxes, DepthInstance3DBoxes
 
 @PIPELINES.register_module()
 class PadMultiViewImage(object):
@@ -328,3 +331,40 @@ class RandomScaleImageMultiViewImage(object):
         repr_str = self.__class__.__name__
         repr_str += f'(size={self.scales}, '
         return repr_str
+
+@PIPELINES.register_module()
+class ObjectRangeFilterWithTraj(_ObjectRangeFilter):
+    """
+    ObjectRangeFilter that also keeps gt_fut_traj and gt_fut_traj_mask in sync.
+    """
+
+    def __call__(self, input_dict):
+        gt_bboxes_3d = input_dict['gt_bboxes_3d']
+        if isinstance(gt_bboxes_3d, (LiDARInstance3DBoxes, DepthInstance3DBoxes)):
+            bev_range = self.pcd_range[[0, 1, 3, 4]]
+        else:
+            bev_range = self.pcd_range[[0, 2, 3, 5]]
+        mask = gt_bboxes_3d.in_range_bev(bev_range).numpy().astype(bool)
+
+        for key in ('gt_fut_traj', 'gt_fut_traj_mask'):
+            if key in input_dict and input_dict[key] is not None:
+                input_dict[key] = input_dict[key][mask]
+
+        return super().__call__(input_dict)
+
+
+@PIPELINES.register_module()
+class ObjectNameFilterWithTraj(_ObjectNameFilter):
+    """
+    ObjectNameFilter that also keeps gt_fut_traj and gt_fut_traj_mask in sync.
+    """
+
+    def __call__(self, input_dict):
+        gt_labels_3d = input_dict['gt_labels_3d']
+        mask = np.array([n in self.labels for n in gt_labels_3d], dtype=bool)
+
+        for key in ('gt_fut_traj', 'gt_fut_traj_mask'):
+            if key in input_dict and input_dict[key] is not None:
+                input_dict[key] = input_dict[key][mask]
+
+        return super().__call__(input_dict)

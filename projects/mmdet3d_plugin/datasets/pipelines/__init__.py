@@ -1,17 +1,23 @@
 from .transform_3d import (
-    PadMultiViewImage, NormalizeMultiviewImage, 
-    PhotoMetricDistortionMultiViewImage, CustomCollect3D, RandomScaleImageMultiViewImage)
+    PadMultiViewImage, NormalizeMultiviewImage,
+    PhotoMetricDistortionMultiViewImage, CustomCollect3D, RandomScaleImageMultiViewImage,
+    ObjectRangeFilterWithTraj, ObjectNameFilterWithTraj)
 from .formating import CustomDefaultFormatBundle3D
 from .augmentation import (CropResizeFlipImage, GlobalRotScaleTransImage)
-from .dd3d_mapper import DD3DMapper
+try:
+    from .dd3d_mapper import DD3DMapper
+    _has_dd3d = True
+except ImportError:
+    _has_dd3d = False
 from .loading_vjepa import LoadVJepaFeaturesFromH5
 from .formatting_vjepa import VJepaFormatBundle3D
 __all__ = [
-    'PadMultiViewImage', 'NormalizeMultiviewImage', 
+    'PadMultiViewImage', 'NormalizeMultiviewImage',
     'PhotoMetricDistortionMultiViewImage', 'CustomDefaultFormatBundle3D', 'CustomCollect3D',
     'RandomScaleImageMultiViewImage',
     'CropResizeFlipImage', 'GlobalRotScaleTransImage',
-    'DD3DMapper',
+    *(['DD3DMapper'] if _has_dd3d else []),
     'LoadVJepaFeaturesFromH5',
     'VJepaFormatBundle3D',
+    'ObjectRangeFilterWithTraj', 'ObjectNameFilterWithTraj',
 ]

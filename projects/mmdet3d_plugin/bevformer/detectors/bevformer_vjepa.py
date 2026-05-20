@@ -2,9 +2,12 @@ import torch
 import torch.nn as nn
 
 from mmcv.runner import auto_fp16
-from mmdet.models import DETECTORS
+from mmcv.utils import build_from_cfg
+from mmdet.models import DETECTORS, HEADS
+from mmdet3d.core import bbox3d2result
 
 from .bevformer import BEVFormer
+from projects.mmdet3d_plugin.core.bbox.util import denormalize_bbox
 # class VJepaAdapter(nn.Module):
 #     """
 #     Stronger adapter from cached V-JEPA dense tokens to BEVFormer image-feature format.
@@ -229,6 +232,8 @@ class BEVFormerVJepa(BEVFormer):
         vjepa_adapter_hidden_dim=512,
         vjepa_adapter_num_blocks=4,
         vjepa_gate_hidden_dim=256,
+        ego_trajectory_head=None,
+        motion_head=None,
         *args,
         **kwargs,
     ):
@@ -253,7 +258,16 @@ class BEVFormerVJepa(BEVFormer):
             )
         else:
             self.vjepa_temporal_gate = None
-                
+
+        self.ego_trajectory_head = (
+            build_from_cfg(ego_trajectory_head, HEADS)
+            if ego_trajectory_head is not None else None
+        )
+        self.motion_head = (
+            build_from_cfg(motion_head, HEADS)
+            if motion_head is not None else None
+        )
+
     def _prepare_vjepa_features(self, img):
         """
         Convert cached V-JEPA features to BEVFormer image feature map.
@@ -368,6 +382,71 @@ class BEVFormerVJepa(BEVFormer):
     def extract_feat(self, img, img_metas=None, len_queue=None):
         return self.extract_img_feat(img, img_metas, len_queue=len_queue)
 
+    def forward_pts_train(
+        self,
+        pts_feats,
+        gt_bboxes_3d,
+        gt_labels_3d,
+        img_metas,
+        gt_bboxes_ignore=None,
+        gt_future_ego=None,
+        gt_fut_traj=None,
+        gt_fut_traj_mask=None,
+        prev_bev=None,
+    ):
+        """
+        Detection + ego-trajectory + motion prediction training pass.
+
+        Extra args vs. the base class:
+            gt_future_ego:     [B, num_waypoints, 2] — future ego positions in
+                               current ego frame (NaN for end-of-scene).
+            gt_fut_traj:       list[Tensor[N, T, 2]] — per-agent future
+                               trajectories in agent-local frame.
+            gt_fut_traj_mask:  list[Tensor[N, T]]    — validity mask
+                               (1 = valid step, 0 = agent exited scene).
+        """
+        outs = self.pts_bbox_head(pts_feats, img_metas, prev_bev)
+        losses = self.pts_bbox_head.loss(
+            gt_bboxes_3d, gt_labels_3d, outs, img_metas=img_metas
+        )
+
+        # ── Track 1: Ego Trajectory Head ────────────────────────────────────
+        if self.ego_trajectory_head is not None and gt_future_ego is not None:
+            bev_embed = outs['bev_embed']          # [B, H*W, C]
+            ego_wp = self.ego_trajectory_head(bev_embed, img_metas)
+            losses.update(self.ego_trajectory_head.loss(ego_wp, gt_future_ego))
+
+        # ── Track 2: Agent Motion Head ───────────────────────────────────────
+        if (
+            self.motion_head is not None
+            and gt_fut_traj is not None
+            and gt_fut_traj_mask is not None
+        ):
+            query_feats = outs.get('query_feats')  # [B, 900, C]
+            if query_feats is not None:
+                motion_preds = self.motion_head(query_feats.float())
+                last_cls  = outs['all_cls_scores'][-1].detach()
+                last_bbox = outs['all_bbox_preds'][-1].detach()
+                pos_inds, pos_gt_inds = self.pts_bbox_head.get_motion_matching(
+                    last_cls, last_bbox, gt_bboxes_3d, gt_labels_3d
+                )
+                # Extract vx, vy (cols 7:8) from GT boxes — [N, 2] per batch item.
+                gt_velocities = [
+                    boxes.tensor[:, 7:9] for boxes in gt_bboxes_3d
+                ]
+                losses.update(
+                    self.motion_head.loss(
+                        motion_preds,
+                        pos_inds,
+                        pos_gt_inds,
+                        gt_fut_traj,
+                        gt_fut_traj_mask,
+                        gt_velocities_list=gt_velocities,
+                    )
+                )
+
+        return losses
+
     @auto_fp16(apply_to=("img", "points"))
     def forward_train(
         self,
@@ -382,13 +461,16 @@ class BEVFormerVJepa(BEVFormer):
         gt_bboxes_ignore=None,
         img_depth=None,
         img_mask=None,
+        gt_future_ego=None,
+        gt_fut_traj=None,
+        gt_fut_traj_mask=None,
     ):
         """
         V-JEPA training path.
 
-        This still does not use BEVFormer prev_bev temporal memory.
         Temporal fusion happens inside cached V-JEPA tokens when
-        vjepa_temporal_reduce='gated'.
+        vjepa_temporal_reduce='gated'.  prev_bev is not used here; temporal
+        context flows through the V-JEPA adapter.
         """
 
         # If img_metas comes as queue metadata, keep only the current frame metadata.
@@ -400,17 +482,71 @@ class BEVFormerVJepa(BEVFormer):
 
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
 
-        losses = dict()
-
-        losses_pts = self.forward_pts_train(
+        losses = self.forward_pts_train(
             img_feats,
             gt_bboxes_3d,
             gt_labels_3d,
             img_metas,
-            gt_bboxes_ignore,
+            gt_bboxes_ignore=gt_bboxes_ignore,
+            gt_future_ego=gt_future_ego,
+            gt_fut_traj=gt_fut_traj,
+            gt_fut_traj_mask=gt_fut_traj_mask,
             prev_bev=None,
         )
 
-        losses.update(losses_pts)
         return losses
-    
+
+    def simple_test_pts(self, x, img_metas, prev_bev=None, rescale=False):
+        """
+        Detection + ego trajectory + agent motion inference.
+
+        Stores per-sample keys in each result dict:
+            ego_waypoints   [6, 2]            — predicted ego future (m, ego frame)
+            motion_preds    [max_num, 6, 2]   — agent motion for top-K queries
+            motion_pred_xy  [max_num, 2]      — decoded (x, y) of those queries (m, LiDAR frame)
+            motion_scores   [max_num]         — max class score per query
+        """
+        outs = self.pts_bbox_head(x, img_metas, prev_bev=prev_bev)
+
+        bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas, rescale=rescale)
+        bbox_results = [
+            bbox3d2result(bboxes, scores, labels)
+            for bboxes, scores, labels in bbox_list
+        ]
+
+        # ── Ego trajectory ────────────────────────────────────────────────────
+        if self.ego_trajectory_head is not None:
+            bev_embed = outs['bev_embed']
+            if bev_embed.shape[0] != len(img_metas):
+                bev_embed = bev_embed.permute(1, 0, 2).contiguous()
+            ego_wp = self.ego_trajectory_head(bev_embed.float(), img_metas)  # [B, 6, 2]
+            for i, rd in enumerate(bbox_results):
+                rd['ego_waypoints'] = ego_wp[i].cpu().numpy()
+
+        # ── Agent motion ──────────────────────────────────────────────────────
+        if self.motion_head is not None:
+            query_feats = outs.get('query_feats')
+            if query_feats is not None:
+                motion_preds = self.motion_head(query_feats.float())  # [B, 900, 6, 2]
+                cls_scores = outs['all_cls_scores'][-1]               # [B, 900, num_cls]
+                bbox_preds  = outs['all_bbox_preds'][-1]              # [B, 900, 10]
+                B           = cls_scores.shape[0]
+                max_num     = self.pts_bbox_head.bbox_coder.max_num
+                pc_range    = torch.tensor(
+                    self.pts_bbox_head.bbox_coder.pc_range,
+                    device=cls_scores.device, dtype=torch.float32,
+                )
+
+                # Top-K query selection — mirrors NMSFreeCoder.decode_single
+                topk_scores, topk_flat = cls_scores.sigmoid().view(B, -1).topk(max_num)
+                query_inds = topk_flat // cls_scores.shape[-1]  # [B, max_num]
+
+                for i, rd in enumerate(bbox_results):
+                    qi  = query_inds[i]                                     # [max_num]
+                    xy  = denormalize_bbox(bbox_preds[i, qi], pc_range)[..., :2]
+                    rd['motion_preds']   = motion_preds[i, qi].cpu().numpy()  # [max_num, 6, 2]
+                    rd['motion_pred_xy'] = xy.cpu().numpy()                   # [max_num, 2]
+                    rd['motion_scores']  = topk_scores[i].cpu().numpy()       # [max_num]
+
+        return outs['bev_embed'], bbox_results
+

@@ -22,11 +22,61 @@ class CustomNuScenesDataset(NuScenesDataset):
     This datset only add camera intrinsics and extrinsics to the results.
     """
 
-    def __init__(self, queue_length=4, bev_size=(200, 200), overlap_test=False, *args, **kwargs):
+    def __init__(
+        self,
+        queue_length=4,
+        bev_size=(200, 200),
+        overlap_test=False,
+        num_future_frames=6,
+        future_dt=0.5,
+        *args,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.queue_length = queue_length
         self.overlap_test = overlap_test
         self.bev_size = bev_size
+        self.num_future_frames = num_future_frames
+        self.future_dt = future_dt
+        # Fast token→index lookup for following the next-frame chain
+        self.token_to_idx = {
+            info['token']: i for i, info in enumerate(self.data_infos)
+        }
+
+    def _compute_future_ego_waypoints(self, info):
+        """
+        Return future ego positions in the current ego frame.
+
+        Follows the 'next' sample chain for num_future_frames steps.  Each
+        future ego origin is expressed as (x, y) in the current ego frame.
+        Waypoints for frames beyond the scene end are filled with NaN so the
+        loss can mask them out.
+
+        Returns:
+            np.ndarray [num_future_frames, 2] float32
+        """
+        curr_trans = np.array(info['ego2global_translation'], dtype=np.float64)
+        curr_R = Quaternion(info['ego2global_rotation']).rotation_matrix  # ego→global [3,3]
+
+        waypoints = []
+        cur_info = info
+        for _ in range(self.num_future_frames):
+            next_token = cur_info.get('next', '')
+            if not next_token or next_token not in self.token_to_idx:
+                break
+            cur_info = self.data_infos[self.token_to_idx[next_token]]
+            fut_trans = np.array(cur_info['ego2global_translation'], dtype=np.float64)
+            # Vector from current ego origin to future ego origin, in global frame
+            delta_global = fut_trans - curr_trans                   # [3]
+            # Rotate into current ego frame: ego_pos = R^T @ delta_global
+            delta_ego = curr_R.T @ delta_global                     # [3]
+            waypoints.append(delta_ego[:2].astype(np.float32))
+
+        # Pad with NaN for missing future frames
+        result = np.full((self.num_future_frames, 2), float('nan'), dtype=np.float32)
+        for k, wp in enumerate(waypoints):
+            result[k] = wp
+        return result
         
     def prepare_train_data(self, index):
         """
@@ -153,6 +203,18 @@ class CustomNuScenesDataset(NuScenesDataset):
             annos = self.get_ann_info(index)
             input_dict['ann_info'] = annos
 
+            # Load per-agent future trajectories if the pkl provides them.
+            # These are already in agent-local frame (origin = agent center,
+            # x-axis = agent heading direction) with shape [N, 6, 2] / [N, 6].
+            # valid_flag / num_lidar_pts mask is applied here to stay in sync
+            # with gt_boxes loaded by get_ann_info().
+            if 'gt_fut_traj' in info:
+                mask = (info['valid_flag']
+                        if self.use_valid_flag
+                        else info['num_lidar_pts'] > 0)
+                input_dict['gt_fut_traj'] = info['gt_fut_traj'][mask]
+                input_dict['gt_fut_traj_mask'] = info['gt_fut_traj_mask'][mask]
+
         rotation = Quaternion(input_dict['ego2global_rotation'])
         translation = input_dict['ego2global_translation']
         can_bus = input_dict['can_bus']
@@ -163,6 +225,9 @@ class CustomNuScenesDataset(NuScenesDataset):
             patch_angle += 360
         can_bus[-2] = patch_angle / 180 * np.pi
         can_bus[-1] = patch_angle
+
+        if not self.test_mode:
+            input_dict['gt_future_ego'] = self._compute_future_ego_waypoints(info)
 
         return input_dict
 
@@ -238,3 +303,96 @@ class CustomNuScenesDataset(NuScenesDataset):
         detail['{}/NDS'.format(metric_prefix)] = metrics['nd_score']
         detail['{}/mAP'.format(metric_prefix)] = metrics['mean_ap']
         return detail
+
+    def evaluate(self, results, metric='bbox', logger=None,
+                 jsonfile_prefix=None, result_names=['pts_bbox'],
+                 show=False, out_dir=None, pipeline=None):
+        results_dict = super().evaluate(
+            results, metric=metric, logger=logger,
+            jsonfile_prefix=jsonfile_prefix, result_names=result_names,
+            show=show, out_dir=out_dir, pipeline=pipeline,
+        )
+
+        if results and 'ego_waypoints' in results[0]:
+            ego_ade, ego_fde = self._eval_ego_trajectory(results)
+            results_dict['ego/ADE'] = ego_ade
+            results_dict['ego/FDE'] = ego_fde
+            mmcv.utils.print_log(
+                f'Ego trajectory  ADE: {ego_ade:.4f} m   FDE: {ego_fde:.4f} m',
+                logger=logger,
+            )
+
+        if results and 'motion_preds' in results[0]:
+            motion_ade, motion_fde = self._eval_agent_motion(results)
+            results_dict['motion/ADE'] = motion_ade
+            results_dict['motion/FDE'] = motion_fde
+            mmcv.utils.print_log(
+                f'Agent motion    ADE: {motion_ade:.4f} m   FDE: {motion_fde:.4f} m',
+                logger=logger,
+            )
+
+        return results_dict
+
+    def _eval_ego_trajectory(self, results):
+        """Mean ADE and FDE for ego future waypoints (meters)."""
+        ades, fdes = [], []
+        for i, result in enumerate(results):
+            if 'ego_waypoints' not in result:
+                continue
+            gt = self._compute_future_ego_waypoints(self.data_infos[i])  # [6, 2]
+            pred = result['ego_waypoints']                                 # [6, 2]
+            valid = np.isfinite(gt).all(axis=-1)                          # [6] bool
+            if not valid.any():
+                continue
+            err = np.linalg.norm(pred[valid] - gt[valid], axis=-1)        # [N_valid]
+            ades.append(err.mean())
+            fdes.append(err[-1])
+        if not ades:
+            return float('nan'), float('nan')
+        return float(np.mean(ades)), float(np.mean(fdes))
+
+    def _eval_agent_motion(self, results, match_thresh=4.0, min_speed=0.5):
+        """
+        ADE / FDE for moving agents (m, agent-local frame).
+
+        Matches each GT moving agent to the nearest predicted query center
+        within match_thresh metres. Both pred and GT trajectories are in the
+        agent-local frame so the L2 error is directly interpretable in metres.
+        """
+        ades, fdes = [], []
+        for i, result in enumerate(results):
+            info = self.data_infos[i]
+            if 'gt_fut_traj' not in info or 'gt_velocity' not in info:
+                continue
+
+            mask = (info['valid_flag'] if self.use_valid_flag
+                    else info['num_lidar_pts'] > 0)
+            gt_boxes    = info['gt_boxes'][mask]        # [N, 9]
+            gt_fut_traj = info['gt_fut_traj'][mask]     # [N, 6, 2]
+            gt_velocity = info['gt_velocity'][mask]     # [N, 2]
+
+            speed   = np.linalg.norm(gt_velocity, axis=-1)  # [N]
+            moving  = speed > min_speed
+            if not moving.any():
+                continue
+
+            gt_xy   = gt_boxes[moving, :2]   # [M, 2]
+            gt_traj = gt_fut_traj[moving]    # [M, 6, 2]
+
+            pred_xy   = result['motion_pred_xy']   # [K, 2]
+            pred_traj = result['motion_preds']     # [K, 6, 2]
+
+            # Greedy nearest-neighbour match in BEV
+            dists     = np.linalg.norm(gt_xy[:, None] - pred_xy[None], axis=-1)  # [M, K]
+            matched_k = dists.argmin(axis=1)                                       # [M]
+            min_dists = dists[np.arange(len(gt_xy)), matched_k]                   # [M]
+            valid     = min_dists < match_thresh
+
+            for m, k in zip(np.where(valid)[0], matched_k[valid]):
+                err = np.linalg.norm(pred_traj[k] - gt_traj[m], axis=-1)  # [6]
+                ades.append(err.mean())
+                fdes.append(err[-1])
+
+        if not ades:
+            return float('nan'), float('nan')
+        return float(np.mean(ades)), float(np.mean(fdes))
