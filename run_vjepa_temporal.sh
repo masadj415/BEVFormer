@@ -39,7 +39,7 @@ cd /home/tlphan/cs503/BEVFormer
 export PYTHONPATH=$PWD:$PWD/tools:${PYTHONPATH:-}
 
 CONFIG=/home/tlphan/cs503/BEVFormer/projects/configs/bevformer/bevformer_vjepa_temporal_izar.py
-WORKDIR=/scratch/izar/tlphan/work_dirs/vjepa_temporal_motion
+WORKDIR=/scratch/izar/tlphan/work_dirs/vjepa_temporal_motion_2026_05_21
 
 mkdir -p /home/tlphan/cs503/BEVFormer/slurm_logs
 mkdir -p $WORKDIR
@@ -48,7 +48,7 @@ RESUME_ARGS=""
 if [ -f "$WORKDIR/latest.pth" ]; then
   RESUME_ARGS="--resume-from $WORKDIR/latest.pth"
 else
-  echo "WARNING: No checkpoint found in $WORKDIR — training from scratch"
+  echo "Starting fresh training in $WORKDIR"
 fi
 
 srun bash -c "

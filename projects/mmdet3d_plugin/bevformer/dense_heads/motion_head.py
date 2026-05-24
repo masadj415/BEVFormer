@@ -30,7 +30,7 @@ class MotionHead(nn.Module):
         embed_dims=256,
         num_waypoints=6,
         future_dt=0.5,
-        loss_weight=0.25,
+        loss_weight=0.02,
         min_agent_speed=0.5,
     ):
         super().__init__()

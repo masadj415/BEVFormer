@@ -57,7 +57,7 @@ class EgoTrajectoryHead(nn.Module):
         num_decoder_layers=2,
         num_heads=8,
         dropout=0.1,
-        loss_weight=0.5,
+        loss_weight=0.02,
     ):
         super().__init__()
         self.num_waypoints = num_waypoints

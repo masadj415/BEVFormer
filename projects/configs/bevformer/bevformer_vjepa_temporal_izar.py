@@ -49,7 +49,7 @@ bev_w_ = 200
 
 # Keep queue_length = 1 because temporal fusion is inside cached V-JEPA slices.
 # The current BEVFormerVJepa forward_train does not use prev_bev.
-queue_length = 4
+queue_length = 1
 
 model = dict(
     type='BEVFormerVJepa',
@@ -72,7 +72,8 @@ model = dict(
     # Track 1: Ego trajectory head.
     # Predicts 6 future ego waypoints (3 s at 0.5 s/step) in current ego frame.
     # Initialized from canbus (speed/yaw prior) + 2-layer BEV cross-attention.
-    # Start weight at 0.1; ramp toward 0.5 after ~10 k iters if loss is stable.
+    # loss_weight here is the initial/floor value; AuxLossWarmupHook ramps it
+    # linearly to 0.5 between epoch 9 and 15.
     ego_trajectory_head=dict(
         type='EgoTrajectoryHead',
         embed_dims=_dim_,
@@ -81,20 +82,21 @@ model = dict(
         num_decoder_layers=2,
         num_heads=8,
         dropout=0.1,
-        loss_weight=0.5,
+        loss_weight=0.02,
     ),
 
     # Track 2: Per-agent motion head.
     # Piggybacks on the 900 DETR detection queries (no new queries).
     # GT is real future positions from the motion pkl (not velocity extrapolation).
-    # Only moving agents (|v| > 0.5 m/s) contribute to the loss to avoid the
-    # stationary-agent majority trivially driving the loss to zero.
+    # Only moving agents (|v| > 0.5 m/s) contribute to the loss.
+    # loss_weight here is the initial/floor value; AuxLossWarmupHook ramps it
+    # linearly to 0.25 between epoch 9 and 15.
     motion_head=dict(
         type='MotionHead',
         embed_dims=_dim_,
         num_waypoints=6,
         future_dt=0.5,
-        loss_weight=0.25,
+        loss_weight=0.02,
     ),
 
     img_backbone=None,
@@ -373,6 +375,20 @@ lr_config = dict(
 
 total_epochs = 30
 
+# Gradually ramp auxiliary loss weights from 0.02 → target over epoch 9-15.
+# Prevents auxiliary gradients from conflicting with detection before the
+# shared BEV/query representations have stabilised.
+custom_hooks = [
+    dict(
+        type='AuxLossWarmupHook',
+        start_epoch=9,
+        end_epoch=12,
+        ego_target=0.5,
+        motion_target=0.25,
+        min_weight=0.02,
+    )
+]
+
 runner = dict(
     type='EpochBasedRunner',
     max_epochs=total_epochs
@@ -395,6 +411,7 @@ log_config = dict(
             type='WandbLoggerHook',
             init_kwargs=dict(
                 project='bevformer-vjepa',
+                entity='lord-of-the-strings',
                 name='vjepa_bev_448x800_temporal_bev_4_with_our_best_adapter',
                 dir='/scratch/izar/tlphan/wandb',
                 config=dict(
