@@ -52,7 +52,7 @@ bev_w_ = 200
 queue_length = 4
 
 model = dict(
-    type='BEVFormerVJepa',
+    type='BEVFormerDino',
     use_grid_mask=False,
     video_test_mode=True,
     pretrained=None,
@@ -60,13 +60,13 @@ model = dict(
     # V-JEPA cached feature settings.
     vjepa_in_dim=768,
     vjepa_out_dim=_dim_,
-    vjepa_h=28,
-    vjepa_w=50,
+    vjepa_h=56,
+    vjepa_w=100,
 
     # New temporal fusion.
     vjepa_temporal_reduce='last',
     vjepa_adapter_num_blocks=4,
-    vjepa_adapter_hidden_dim=768,
+    vjepa_adapter_hidden_dim=512,
     vjepa_gate_hidden_dim=256,
 
     img_backbone=None,
@@ -215,10 +215,10 @@ file_client_args = dict(backend='disk')
 train_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_dino_896x1600.h5',
         group='vitb',
-        img_w=800,
-        img_h=448,
+        img_w=1600,
+        img_h=896,
         orig_w=1600,
         orig_h=900
     ),
@@ -249,16 +249,16 @@ train_pipeline = [
 test_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_dino_896x1600.h5',
         group='vitb',
-        img_w=800,
-        img_h=448,
+        img_w=1600,
+        img_h=896,
         orig_w=1600,
         orig_h=900
     ),
     dict(
         type='MultiScaleFlipAug3D',
-        img_scale=(800, 448),
+        img_scale=(1600, 896),
         pts_scale_ratio=1,
         flip=False,
         transforms=[
@@ -277,7 +277,7 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=4,
-    workers_per_gpu=2,
+    workers_per_gpu=6,
 
     train=dict(
         type=dataset_type,
@@ -362,16 +362,16 @@ log_config = dict(
             type='WandbLoggerHook',
             init_kwargs=dict(
                 project='bevformer-vjepa',
-                name='vjepa_bev_448x800_temporal_better_adpater_last_try',
+                name='dino_896_1000_best_settings',
                 dir='/mnt/vilab/scratch/masha/wandb',
                 config=dict(
-                    model='BEVFormerVJepa',
+                    model='BEVFormerDino',
                     features='V-JEPA cached',
                     temporal_reduce='last',
-                    adapter='4 blocks, 768 hidden dim',
+                    adapter='4 blocks, 512 hidden dim',
                     gate_hidden_dim=256,
                     samples_per_gpu=4,
-                    workers_per_gpu=2,
+                    workers_per_gpu=6,
                     queue_length=queue_length,
                     bev_h=bev_h_,
                     bev_w=bev_w_,

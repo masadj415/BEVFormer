@@ -52,7 +52,7 @@ bev_w_ = 200
 queue_length = 4
 
 model = dict(
-    type='BEVFormerVJepa',
+    type='BEVFormerDino',
     use_grid_mask=False,
     video_test_mode=True,
     pretrained=None,
@@ -66,7 +66,7 @@ model = dict(
     # New temporal fusion.
     vjepa_temporal_reduce='last',
     vjepa_adapter_num_blocks=4,
-    vjepa_adapter_hidden_dim=768,
+    vjepa_adapter_hidden_dim=512,
     vjepa_gate_hidden_dim=256,
 
     img_backbone=None,
@@ -215,7 +215,7 @@ file_client_args = dict(backend='disk')
 train_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_dino_448x800.h5',
         group='vitb',
         img_w=800,
         img_h=448,
@@ -249,7 +249,7 @@ train_pipeline = [
 test_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_dino_448x800.h5',
         group='vitb',
         img_w=800,
         img_h=448,
@@ -362,13 +362,13 @@ log_config = dict(
             type='WandbLoggerHook',
             init_kwargs=dict(
                 project='bevformer-vjepa',
-                name='vjepa_bev_448x800_temporal_better_adpater_last_try',
+                name='dino_448_800_best_settings',
                 dir='/mnt/vilab/scratch/masha/wandb',
                 config=dict(
                     model='BEVFormerVJepa',
                     features='V-JEPA cached',
                     temporal_reduce='last',
-                    adapter='4 blocks, 768 hidden dim',
+                    adapter='4 blocks, 512 hidden dim',
                     gate_hidden_dim=256,
                     samples_per_gpu=4,
                     workers_per_gpu=2,
