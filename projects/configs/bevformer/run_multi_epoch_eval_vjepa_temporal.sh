@@ -33,7 +33,7 @@ RESULTS_CSV=$WORKDIR/eval_results_vjepa.csv
 # CSV header
 echo "epoch,mAP,NDS,ego_ADE,ego_FDE,motion_ADE,motion_FDE" > $RESULTS_CSV
 
-for EPOCH in $(seq $STEP $STEP $TOTAL_EPOCHS); do
+for EPOCH in $(seq $TOTAL_EPOCHS -$STEP $STEP); do
     CKPT=$WORKDIR/epoch_${EPOCH}.pth
     if [ ! -f "$CKPT" ]; then
         echo "Skipping epoch $EPOCH — checkpoint not found: $CKPT"

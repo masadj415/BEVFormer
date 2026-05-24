@@ -187,6 +187,7 @@ class BEVFormerVJepa(BEVFormer):
         vjepa_gate_hidden_dim=256,
         ego_trajectory_head=None,
         motion_head=None,
+        map_seg_head=None,
         *args,
         **kwargs,
     ):
@@ -219,6 +220,10 @@ class BEVFormerVJepa(BEVFormer):
         self.motion_head = (
             build_from_cfg(motion_head, HEADS)
             if motion_head is not None else None
+        )
+        self.map_seg_head = (
+            build_from_cfg(map_seg_head, HEADS)
+            if map_seg_head is not None else None
         )
 
     def _prepare_vjepa_features(self, img):
@@ -395,6 +400,7 @@ class BEVFormerVJepa(BEVFormer):
         gt_future_ego=None,
         gt_fut_traj=None,
         gt_fut_traj_mask=None,
+        gt_masks_bev=None,
         prev_bev=None,
     ):
         """
@@ -454,6 +460,15 @@ class BEVFormerVJepa(BEVFormer):
                     )
                 )
 
+        # Map Segmentation Head ──────────────────────────────────
+        if self.map_seg_head is not None and gt_masks_bev is not None:
+            bev_embed = outs['bev_embed']  # [B, H*W, C]
+            B = bev_embed.shape[0]
+            bev_h = self.pts_bbox_head.bev_h
+            bev_w = self.pts_bbox_head.bev_w
+            bev_feat = bev_embed.permute(0, 2, 1).reshape(B, -1, bev_h, bev_w)
+            losses.update(self.map_seg_head.forward_train(bev_feat, gt_masks_bev))
+
         return losses
 
     @auto_fp16(apply_to=("img", "points"))
@@ -473,6 +488,7 @@ class BEVFormerVJepa(BEVFormer):
         gt_future_ego=None,
         gt_fut_traj=None,
         gt_fut_traj_mask=None,
+        gt_masks_bev=None,
     ):
         """
         V-JEPA temporal training path with optional auxiliary heads.
@@ -544,6 +560,7 @@ class BEVFormerVJepa(BEVFormer):
             gt_future_ego=gt_future_ego,
             gt_fut_traj=gt_fut_traj,
             gt_fut_traj_mask=gt_fut_traj_mask,
+            gt_masks_bev=gt_masks_bev,
             prev_bev=prev_bev,
         )
 
@@ -603,3 +620,14 @@ class BEVFormerVJepa(BEVFormer):
 
         return outs['bev_embed'], bbox_results
 
+    def simple_test(self, img_metas, img=None, prev_bev=None, rescale=False):
+        new_prev_bev, bbox_list = super().simple_test(
+            img_metas, img=img, prev_bev=prev_bev, rescale=rescale)
+        # Hoist ego/motion keys from pts_bbox to top level so dataset.evaluate() can find them.
+        _hoist = ('ego_waypoints', 'motion_preds', 'motion_pred_xy', 'motion_scores')
+        for result_dict in bbox_list:
+            pts_bbox = result_dict.get('pts_bbox', {})
+            for key in _hoist:
+                if key in pts_bbox:
+                    result_dict[key] = pts_bbox.pop(key)
+        return new_prev_bev, bbox_list

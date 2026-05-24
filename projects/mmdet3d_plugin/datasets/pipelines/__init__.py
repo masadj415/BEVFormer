@@ -11,6 +11,7 @@ except ImportError:
     _has_dd3d = False
 from .loading_vjepa import LoadVJepaFeaturesFromH5
 from .formatting_vjepa import VJepaFormatBundle3D
+from .loading_map import LoadMapMask, LoadMapMaskFromPkl, LoadMapMaskFromNpz
 __all__ = [
     'PadMultiViewImage', 'NormalizeMultiviewImage',
     'PhotoMetricDistortionMultiViewImage', 'CustomDefaultFormatBundle3D', 'CustomCollect3D',
@@ -20,4 +21,5 @@ __all__ = [
     'LoadVJepaFeaturesFromH5',
     'VJepaFormatBundle3D',
     'ObjectRangeFilterWithTraj', 'ObjectNameFilterWithTraj',
+    'LoadMapMask', 'LoadMapMaskFromPkl', 'LoadMapMaskFromNpz',
 ]

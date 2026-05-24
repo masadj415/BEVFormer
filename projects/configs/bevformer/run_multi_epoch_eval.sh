@@ -35,7 +35,7 @@ mkdir -p $WORKDIR/viz
 # CSV header
 echo "epoch,mAP,NDS,seg_mIoU,drivable_area,ped_crossing,walkway,stop_line,carpark_area,divider" > $RESULTS_CSV
 
-for EPOCH in $(seq $STEP $STEP $TOTAL_EPOCHS); do
+for EPOCH in $(seq $TOTAL_EPOCHS -$STEP $STEP); do
     CKPT=$WORKDIR/epoch_${EPOCH}.pth
     if [ ! -f "$CKPT" ]; then
         echo "Skipping epoch $EPOCH — checkpoint not found: $CKPT"
