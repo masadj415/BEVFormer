@@ -462,11 +462,11 @@ class BEVFormerVJepa(BEVFormer):
 
         # Map Segmentation Head ──────────────────────────────────
         if self.map_seg_head is not None and gt_masks_bev is not None:
-            bev_embed = outs['bev_embed']  # [B, H*W, C]
-            B = bev_embed.shape[0]
+            bev_embed = outs['bev_embed']  # [H*W, B, C] — sequence-first from transformer
+            B = bev_embed.shape[1]
             bev_h = self.pts_bbox_head.bev_h
             bev_w = self.pts_bbox_head.bev_w
-            bev_feat = bev_embed.permute(0, 2, 1).reshape(B, -1, bev_h, bev_w)
+            bev_feat = bev_embed.permute(1, 2, 0).reshape(B, -1, bev_h, bev_w)
             losses.update(self.map_seg_head.forward_train(bev_feat, gt_masks_bev))
 
         return losses
@@ -620,14 +620,3 @@ class BEVFormerVJepa(BEVFormer):
 
         return outs['bev_embed'], bbox_results
 
-    def simple_test(self, img_metas, img=None, prev_bev=None, rescale=False):
-        new_prev_bev, bbox_list = super().simple_test(
-            img_metas, img=img, prev_bev=prev_bev, rescale=rescale)
-        # Hoist ego/motion keys from pts_bbox to top level so dataset.evaluate() can find them.
-        _hoist = ('ego_waypoints', 'motion_preds', 'motion_pred_xy', 'motion_scores')
-        for result_dict in bbox_list:
-            pts_bbox = result_dict.get('pts_bbox', {})
-            for key in _hoist:
-                if key in pts_bbox:
-                    result_dict[key] = pts_bbox.pop(key)
-        return new_prev_bev, bbox_list
