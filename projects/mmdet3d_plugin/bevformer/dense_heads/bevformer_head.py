@@ -632,8 +632,10 @@ class BEVFormerHead_GroupDETR(BEVFormerHead):
             'bev_embed': bev_embed,
             'all_cls_scores': outputs_classes,
             'all_bbox_preds': outputs_coords,
+            'query_feats': hs[-1],
             'enc_cls_scores': None,
             'enc_bbox_preds': None,
+
         }
 
         return outs

@@ -92,6 +92,18 @@ class MapSegHead(BaseModule):
     def loss(self, seg_logits, gt_masks_bev):
         """Binary sigmoid focal loss over all classes and spatial positions.
 
+        Fix 1: samples whose GT mask is entirely zero (no map annotations for
+        that scene) are excluded from the loss.  Without this, the model learns
+        that predicting all-zero is free, locking into a degenerate solution
+        before ever seeing valid map data.  A graph-connected zero is returned
+        when every sample in the batch is empty so that DDP can still aggregate
+        gradients for all parameters.
+
+        Fix 3: within the surviving valid samples, classes that are absent
+        across the whole sub-batch (e.g. no stop-lines in this location) are
+        also excluded.  Their absence should not push the head toward all-zero
+        predictions on those thin classes.
+
         Args:
             seg_logits (Tensor): Raw logits (B, num_classes, H, W).
             gt_masks_bev (Tensor): Binary GT masks (B, num_classes, H, W).
@@ -101,15 +113,30 @@ class MapSegHead(BaseModule):
         B, C, H, W = seg_logits.shape
         target = gt_masks_bev.float()  # (B, C, H, W)
 
-        # expand alpha to (1, C, 1, 1) so it broadcasts over B, H, W
-        alpha = self.alpha.view(1, C, 1, 1)  # (1, 6, 1, 1)
-        alpha_t = alpha * target + (1 - alpha) * (1 - target)  # (B, C, H, W)
+        # Fix 1: per-sample validity — skip samples with all-zero GT maps.
+        sample_valid = target.sum(dim=(1, 2, 3)) > 0  # (B,)
+        if not sample_valid.any():
+            # DDP requires all parameters to receive a gradient every step,
+            # so return a zero that is still attached to the computation graph.
+            return dict(loss_seg=seg_logits.sum() * 0.0)
+
+        seg_logits = seg_logits[sample_valid]  # (V, C, H, W)
+        target = target[sample_valid]          # (V, C, H, W)
+
+        # Fix 3: per-class validity — skip classes absent in this sub-batch.
+        class_valid = target.sum(dim=(0, 2, 3)) > 0  # (C,)
+
+        alpha = self.alpha.view(1, C, 1, 1)
+        alpha_t = alpha * target + (1 - alpha) * (1 - target)
 
         pred_sigmoid = seg_logits.sigmoid()
         pt = pred_sigmoid * target + (1 - pred_sigmoid) * (1 - target)
         focal_weight = alpha_t * (1 - pt).pow(self.gamma)
         bce = F.binary_cross_entropy_with_logits(seg_logits, target, reduction='none')
-        loss = (focal_weight * bce).mean() * self.loss_weight
+
+        # Average over present classes only so absent classes can't bias the
+        # head toward all-zero predictions.
+        loss = (focal_weight * bce)[:, class_valid].mean() * self.loss_weight
         return dict(loss_seg=loss)
 
     def forward_train(self, bev_feat, gt_masks_bev):

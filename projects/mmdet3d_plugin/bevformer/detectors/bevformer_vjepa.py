@@ -419,13 +419,23 @@ class BEVFormerVJepa(BEVFormer):
             gt_bboxes_3d, gt_labels_3d, outs, img_metas=img_metas
         )
 
-        # Ego Trajectory Head ────────────────────────────────────
         if self.ego_trajectory_head is not None and gt_future_ego is not None:
-            bev_embed = outs['bev_embed']          # [B, H*W, C]
-            ego_wp = self.ego_trajectory_head(bev_embed, img_metas)
+            bev_embed = outs['bev_embed']
+
+            bev_h = self.pts_bbox_head.bev_h
+            bev_w = self.pts_bbox_head.bev_w
+            num_bev_tokens = bev_h * bev_w
+
+            if bev_embed.shape[0] == num_bev_tokens:
+                bev_embed = bev_embed.permute(1, 0, 2).contiguous()
+            elif bev_embed.shape[1] == num_bev_tokens:
+                bev_embed = bev_embed.contiguous()
+            else:
+                raise ValueError(f"Unexpected bev_embed shape {bev_embed.shape}")
+
+            ego_wp = self.ego_trajectory_head(bev_embed.float(), img_metas)
             losses.update(self.ego_trajectory_head.loss(ego_wp, gt_future_ego))
 
-        # Agent Motion Head ───────────────────────────────────────
         if (
             self.motion_head is not None
             and gt_fut_traj is not None
@@ -460,13 +470,58 @@ class BEVFormerVJepa(BEVFormer):
                     )
                 )
 
-        # Map Segmentation Head ──────────────────────────────────
         if self.map_seg_head is not None and gt_masks_bev is not None:
-            bev_embed = outs['bev_embed']  # [B, H*W, C]
-            B = bev_embed.shape[0]
+            bev_embed = outs['bev_embed']
+
+            # BEVFormer can return bev_embed either as:
+            #   [B, H*W, C]
+            # or
+            #   [H*W, B, C]
+            # In this run it is [40000, B, C], so convert it.
             bev_h = self.pts_bbox_head.bev_h
             bev_w = self.pts_bbox_head.bev_w
-            bev_feat = bev_embed.permute(0, 2, 1).reshape(B, -1, bev_h, bev_w)
+            num_bev_tokens = bev_h * bev_w
+
+            if bev_embed.dim() != 3:
+                raise ValueError(f"Expected bev_embed to be 3D, got {bev_embed.shape}")
+
+            if bev_embed.shape[0] == num_bev_tokens:
+                # [H*W, B, C] -> [B, H*W, C]
+                bev_embed = bev_embed.permute(1, 0, 2).contiguous()
+            elif bev_embed.shape[1] == num_bev_tokens:
+                # already [B, H*W, C]
+                bev_embed = bev_embed.contiguous()
+            else:
+                raise ValueError(
+                    f"Unexpected bev_embed shape {bev_embed.shape}; "
+                    f"expected [B, {num_bev_tokens}, C] or [{num_bev_tokens}, B, C]"
+                )
+
+            B = bev_embed.shape[0]
+            C = bev_embed.shape[2]
+
+            bev_feat = bev_embed.permute(0, 2, 1).contiguous().reshape(
+                B, C, bev_h, bev_w
+            )
+            if not hasattr(self, "_map_debug_counter"):
+                self._map_debug_counter = 0
+
+            # if self._map_debug_counter < 5:
+            #     print("\n===== MAP SEG DEBUG =====")
+            #     print("bev_feat shape:", bev_feat.shape)
+            #     print("bev_feat mean/std:", bev_feat.float().mean().item(), bev_feat.float().std().item())
+
+            #     print("gt_masks_bev type:", type(gt_masks_bev))
+            #     print("gt_masks_bev shape:", gt_masks_bev.shape)
+            #     print("gt_masks_bev min/max:", gt_masks_bev.float().min().item(), gt_masks_bev.float().max().item())
+            #     print("gt_masks_bev mean/sum:", gt_masks_bev.float().mean().item(), gt_masks_bev.float().sum().item())
+
+            #     print("gt_masks_bev per-class sum:")
+            #     print(gt_masks_bev.float().sum(dim=(-1, -2)))
+
+            #     print("=========================\n")
+            #     self._map_debug_counter += 1
+
             losses.update(self.map_seg_head.forward_train(bev_feat, gt_masks_bev))
 
         return losses

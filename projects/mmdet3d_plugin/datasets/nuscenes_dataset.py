@@ -42,6 +42,15 @@ class CustomNuScenesDataset(NuScenesDataset):
         self.token_to_idx = {
             info['token']: i for i, info in enumerate(self.data_infos)
         }
+        # Precompute which samples have map data (path present in the pkl).
+        # Used by MapAwareDistributedGroupSampler to guarantee ≥1 map-valid
+        # sample per batch. Path presence is used as the proxy — scenes whose
+        # npz files are genuinely all-zeros are still marked True here but the
+        # seg loss will skip them via the per-sample validity mask (Fix 1).
+        self.has_map_flags = np.array(
+            [bool(info.get('maps', {}).get('map_mask')) for info in self.data_infos],
+            dtype=bool,
+        )
 
     def _compute_future_ego_waypoints(self, info):
         """
@@ -229,6 +238,9 @@ class CustomNuScenesDataset(NuScenesDataset):
         if not self.test_mode:
             input_dict['gt_future_ego'] = self._compute_future_ego_waypoints(info)
 
+        # Required by LoadMapMaskFromNpz — pass the map npz path stored in the pkl.
+        input_dict['maps'] = info.get('maps', {})
+
         return input_dict
 
     def __getitem__(self, idx):
@@ -313,7 +325,9 @@ class CustomNuScenesDataset(NuScenesDataset):
             show=show, out_dir=out_dir, pipeline=pipeline,
         )
 
-        if results and 'ego_waypoints' in results[0]:
+        # ego/motion keys live inside pts_bbox (set by simple_test_pts)
+        _sample = results[0].get('pts_bbox', results[0]) if results else {}
+        if results and 'ego_waypoints' in _sample:
             ego_ade, ego_fde = self._eval_ego_trajectory(results)
             results_dict['ego/ADE'] = ego_ade
             results_dict['ego/FDE'] = ego_fde
@@ -322,7 +336,7 @@ class CustomNuScenesDataset(NuScenesDataset):
                 logger=logger,
             )
 
-        if results and 'motion_preds' in results[0]:
+        if results and 'motion_preds' in _sample:
             motion_ade, motion_fde = self._eval_agent_motion(results)
             results_dict['motion/ADE'] = motion_ade
             results_dict['motion/FDE'] = motion_fde
@@ -337,10 +351,11 @@ class CustomNuScenesDataset(NuScenesDataset):
         """Mean ADE and FDE for ego future waypoints (meters)."""
         ades, fdes = [], []
         for i, result in enumerate(results):
-            if 'ego_waypoints' not in result:
+            r = result.get('pts_bbox', result)
+            if 'ego_waypoints' not in r:
                 continue
             gt = self._compute_future_ego_waypoints(self.data_infos[i])  # [6, 2]
-            pred = result['ego_waypoints']                                 # [6, 2]
+            pred = r['ego_waypoints']                                      # [6, 2]
             valid = np.isfinite(gt).all(axis=-1)                          # [6] bool
             if not valid.any():
                 continue
@@ -361,6 +376,7 @@ class CustomNuScenesDataset(NuScenesDataset):
         """
         ades, fdes = [], []
         for i, result in enumerate(results):
+            r = result.get('pts_bbox', result)
             info = self.data_infos[i]
             if 'gt_fut_traj' not in info or 'gt_velocity' not in info:
                 continue
@@ -379,8 +395,8 @@ class CustomNuScenesDataset(NuScenesDataset):
             gt_xy   = gt_boxes[moving, :2]   # [M, 2]
             gt_traj = gt_fut_traj[moving]    # [M, 6, 2]
 
-            pred_xy   = result['motion_pred_xy']   # [K, 2]
-            pred_traj = result['motion_preds']     # [K, 6, 2]
+            pred_xy   = r['motion_pred_xy']   # [K, 2]
+            pred_traj = r['motion_preds']     # [K, 6, 2]
 
             # Greedy nearest-neighbour match in BEV
             dists     = np.linalg.norm(gt_xy[:, None] - pred_xy[None], axis=-1)  # [M, K]

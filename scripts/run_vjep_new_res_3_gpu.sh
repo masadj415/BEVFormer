@@ -3,6 +3,11 @@ set -euo pipefail
 
 cd /mnt/vilab/scratch/masha/flextok_RCP/BEVFormer
 
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
 export USER=mduric
 export LOGNAME=mduric
 export HOME=/mnt/vilab/scratch/masha
@@ -10,7 +15,7 @@ export HOME=/mnt/vilab/scratch/masha
 export HDF5_USE_FILE_LOCKING=FALSE
 export MPLCONFIGDIR=/mnt/vilab/scratch/masha/.cache/matplotlib
 
-# Optional, helps with CUDA memory fragmentation.
+# Helps with CUDA memory fragmentation.
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
 mkdir -p "$MPLCONFIGDIR"
@@ -37,8 +42,12 @@ mkdir -p "$WANDB_DATA_DIR"
 
 chmod 600 /mnt/vilab/scratch/masha/.netrc || true
 
-CONFIG=/mnt/vilab/scratch/masha/flextok_RCP/BEVFormer/projects/configs/bevformer/bevformer_adapter_jepa_rcp_new_cache_HIGH.py
-WORKDIR=/mnt/vilab/scratch/masha/work_dirs/bevformer_vjepa_new_adapter_6blocks_3gpu_a100_80_bs12_w0_fix1_high
+CONFIG=/mnt/vilab/scratch/masha/flextok_RCP/BEVFormer/projects/configs/bevformer/bevformer_vjepa_all_heads.py
+WORKDIR=/mnt/vilab/scratch/masha/work_dirs/bevformer_vjepa_4_tasks
+
+# Resume from the last checkpoint in THIS workdir.
+# If latest.pth points to epoch_2.pth, this resumes from epoch 2 and continues at epoch 3.
+RESUME=$WORKDIR/latest.pth
 
 mkdir -p "$WORKDIR"
 
@@ -48,6 +57,22 @@ echo "USER=$USER"
 echo "LOGNAME=$LOGNAME"
 echo "CONFIG=$CONFIG"
 echo "WORKDIR=$WORKDIR"
+echo "RESUME=$RESUME"
+
+if [ ! -f "$CONFIG" ]; then
+  echo "ERROR: config does not exist: $CONFIG"
+  exit 1
+fi
+
+if [ ! -f "$RESUME" ]; then
+  echo "ERROR: resume checkpoint does not exist: $RESUME"
+  echo "Available checkpoints:"
+  find "$WORKDIR" -name "*.pth" -maxdepth 2 -print || true
+  exit 1
+fi
+
+echo "Resolved resume checkpoint:"
+readlink -f "$RESUME" || true
 
 echo "========== SYSTEM DEBUG =========="
 echo "Date:"
@@ -65,8 +90,6 @@ free -h
 echo "/dev/shm:"
 df -h /dev/shm
 
-
-
 echo "Cgroup CPU limits:"
 cat /sys/fs/cgroup/cpu.max 2>/dev/null || true
 cat /sys/fs/cgroup/cpuset.cpus.effective 2>/dev/null || true
@@ -76,6 +99,36 @@ echo "OMP_NUM_THREADS=${OMP_NUM_THREADS:-<unset>}"
 echo "MKL_NUM_THREADS=${MKL_NUM_THREADS:-<unset>}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-<unset>}"
+
+echo "========== CPU DEBUG =========="
+echo "nproc:"
+nproc
+
+echo "lscpu summary:"
+lscpu | grep -E 'CPU\(s\)|Thread|Core|Socket' || true
+
+echo "cpuset effective:"
+cat /sys/fs/cgroup/cpuset.cpus.effective 2>/dev/null || true
+
+echo "cpu.max:"
+cat /sys/fs/cgroup/cpu.max 2>/dev/null || true
+
+echo "computed CPU quota:"
+python - <<'PY'
+import os
+
+print("os.cpu_count():", os.cpu_count())
+
+cpu_max_path = "/sys/fs/cgroup/cpu.max"
+if os.path.exists(cpu_max_path):
+    quota, period = open(cpu_max_path).read().strip().split()
+    if quota == "max":
+        print("cgroup CPU quota: unlimited")
+    else:
+        quota = int(quota)
+        period = int(period)
+        print("cgroup CPU quota:", quota / period, "CPUs")
+PY
 
 echo "========== START TRAINING =========="
 
@@ -89,9 +142,7 @@ fi
 echo "===== GPU INFO ====="
 nvidia-smi
 
-
-
-LOGFILE="$WORKDIR/train_$(date +%Y%m%d_%H%M%S).log"
+LOGFILE="$WORKDIR/train_resume_no_eval_$(date +%Y%m%d_%H%M%S).log"
 
 set +e
 
@@ -102,9 +153,11 @@ python -m torch.distributed.launch \
   "$CONFIG" \
   --launcher pytorch \
   --work-dir "$WORKDIR" \
+  --resume-from "$RESUME" \
+  --no-validate \
   --cfg-options \
     data.samples_per_gpu=4 \
-    data.workers_per_gpu=2 \
+    data.workers_per_gpu=6 \
   2>&1 | tee "$LOGFILE"
 
 STATUS=${PIPESTATUS[0]}

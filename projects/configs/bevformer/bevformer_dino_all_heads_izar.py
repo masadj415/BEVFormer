@@ -13,6 +13,7 @@ _base_ = [
     '../datasets/custom_nus-3d.py',
     '../_base_/default_runtime.py'
 ]
+
 plugin = True
 plugin_dir = 'projects/mmdet3d_plugin/'
 
@@ -124,8 +125,7 @@ model = dict(
     img_neck=None,
 
     pts_bbox_head=dict(
-        type='BEVFormerHead_GroupDETR',
-        group_detr=group_detr,
+        type='BEVFormerHead',
         bev_h=bev_h_,
         bev_w=bev_w_,
         num_query=900,
@@ -187,8 +187,7 @@ model = dict(
                     type='DetrTransformerDecoderLayer',
                     attn_cfgs=[
                         dict(
-                            type='GroupMultiheadAttention',
-                            group=group_detr,
+                            type='MultiheadAttention',
                             embed_dims=_dim_,
                             num_heads=8,
                             dropout=0.1
@@ -262,18 +261,18 @@ model = dict(
 )
 
 dataset_type = 'CustomNuScenesDataset'
-data_root = '/mnt/vilab/scratch/masha/nuscenes_trainval/'
+data_root = '/scratch/izar/mduric/nuscenes_trainval/'
 
 # Motion pkl already contains map npz paths (with_map_200_motion).
-train_ann_file = '/mnt/vilab/scratch/masha/nuscenes_trainval/nuscenes_infos_temporal_train_with_map_200_motion.pkl'
-val_ann_file   = '/mnt/vilab/scratch/masha/nuscenes_trainval/nuscenes_infos_temporal_val_with_map_200_motion.pkl'
+train_ann_file = '/transfer/NaTaMaPa/nuscenes_metadata/nuscenes_infos_temporal_train_with_map_200_motion.pkl'
+val_ann_file   = '/transfer/NaTaMaPa/nuscenes_metadata/nuscenes_infos_temporal_val_with_map_200_motion.pkl'
 
 file_client_args = dict(backend='disk')
 
 train_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
+        h5_path='/transfer/NaTaMaPa/train_feat_vitb_4x448x800.h5',
         group='vitb',
         img_w=800,
         img_h=448,
@@ -291,7 +290,7 @@ train_pipeline = [
     dict(
         type='LoadMapMaskFromNpz',
         classes=map_classes,
-        npz_root='/mnt/vilab/scratch/masha/nuscenes_trainval',
+        npz_root='/scratch/izar/mduric/nuscenes_trainval',
     ),
     # Trajectory-aware filters keep gt_fut_traj / gt_fut_traj_mask in sync
     # with gt_bboxes_3d through each filter step.
@@ -320,7 +319,7 @@ train_pipeline = [
 test_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
+        h5_path='/transfer/NaTaMaPa/train_feat_vitb_4x448x800.h5',
         group='vitb',
         img_w=800,
         img_h=448,
@@ -431,7 +430,7 @@ runner = dict(
 )
 
 evaluation = dict(
-    interval=25,
+    interval=3,
     metric='bbox',
     pipeline=test_pipeline,
     save_best='pts_bbox_NuScenes/NDS',
@@ -446,12 +445,12 @@ log_config = dict(
             type='WandbLoggerHook',
             init_kwargs=dict(
                 project='bevformer-vjepa',
-                entity='masa-duric-epfl',
-                name='vjepa_all_heads_detection_ego_motion_mapseg_group_detr11',
-                dir='/mnt/vilab/scratch/masha/wandb',
+                entity='lord-of-the-strings',
+                name='dino_all_heads_detection_ego_motion_mapseg',
+                dir='/scratch/izar/tlphan/wandb',
                 config=dict(
-                    model='BEVFormerVJepa',
-                    features='V-JEPA cached',
+                    model='BEVFormerVDino',
+                    features='V-Dino cached',
                     temporal_reduce='last',
                     adapter='4 blocks, 512 hidden dim',
                     heads=['detection', 'ego_trajectory', 'motion', 'map_seg'],
@@ -463,11 +462,11 @@ log_config = dict(
                     bev_w=bev_w_,
                     encoder_layers=6,
                     decoder_layers=6,
-                    num_levels=_num_levels_,
+                    num_levels=_num_levels_
                 )
             )
         )
     ]
 )
 
-checkpoint_config = dict(interval=1)
+checkpoint_config = dict(interval=2)
