@@ -42,8 +42,8 @@ mkdir -p "$WANDB_DATA_DIR"
 
 chmod 600 /mnt/vilab/scratch/masha/.netrc || true
 
-CONFIG=/mnt/vilab/scratch/masha/flextok_RCP/BEVFormer/projects/configs/bevformer/bevformer_vjepa_all_heads.py
-WORKDIR=/mnt/vilab/scratch/masha/work_dirs/bevformer_vjepa_4_tasks
+CONFIG=/mnt/vilab/scratch/masha/flextok_RCP/BEVFormer/projects/configs/bevformer/bevformer_dino_all_heads.py
+WORKDIR=/mnt/vilab/scratch/masha/work_dirs/bevformer_dino_all_heads
 
 # Resume from the last checkpoint in THIS workdir.
 # If latest.pth points to epoch_2.pth, this resumes from epoch 2 and continues at epoch 3.
@@ -63,16 +63,6 @@ if [ ! -f "$CONFIG" ]; then
   echo "ERROR: config does not exist: $CONFIG"
   exit 1
 fi
-
-if [ ! -f "$RESUME" ]; then
-  echo "ERROR: resume checkpoint does not exist: $RESUME"
-  echo "Available checkpoints:"
-  find "$WORKDIR" -name "*.pth" -maxdepth 2 -print || true
-  exit 1
-fi
-
-echo "Resolved resume checkpoint:"
-readlink -f "$RESUME" || true
 
 echo "========== SYSTEM DEBUG =========="
 echo "Date:"
@@ -114,21 +104,7 @@ echo "cpu.max:"
 cat /sys/fs/cgroup/cpu.max 2>/dev/null || true
 
 echo "computed CPU quota:"
-python - <<'PY'
-import os
 
-print("os.cpu_count():", os.cpu_count())
-
-cpu_max_path = "/sys/fs/cgroup/cpu.max"
-if os.path.exists(cpu_max_path):
-    quota, period = open(cpu_max_path).read().strip().split()
-    if quota == "max":
-        print("cgroup CPU quota: unlimited")
-    else:
-        quota = int(quota)
-        period = int(period)
-        print("cgroup CPU quota:", quota / period, "CPUs")
-PY
 
 echo "========== START TRAINING =========="
 
@@ -152,8 +128,6 @@ python -m torch.distributed.launch \
   tools/train.py \
   "$CONFIG" \
   --launcher pytorch \
-  --work-dir "$WORKDIR" \
-  --resume-from "$RESUME" \
   --no-validate \
   --cfg-options \
     data.samples_per_gpu=4 \
