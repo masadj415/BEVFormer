@@ -79,6 +79,19 @@ def build_dataloader(dataset,
     init_fn = partial(
         worker_init_fn, num_workers=num_workers, rank=rank,
         seed=seed) if seed is not None else None
+    # Make a local copy so we do not accidentally modify the original kwargs.
+    loader_kwargs = kwargs.copy()
+
+    # Faster CPU -> GPU transfer.
+    loader_kwargs.setdefault('pin_memory', True)
+
+    # These options are valid only when num_workers > 0.
+    if num_workers > 0:
+        loader_kwargs.setdefault('persistent_workers', True)
+        loader_kwargs.setdefault('prefetch_factor', 4)
+    else:
+        loader_kwargs.setdefault('persistent_workers', False)
+        loader_kwargs.pop('prefetch_factor', None)
 
     data_loader = DataLoader(
         dataset,
@@ -86,12 +99,22 @@ def build_dataloader(dataset,
         sampler=sampler,
         num_workers=num_workers,
         collate_fn=partial(collate, samples_per_gpu=samples_per_gpu),
-        pin_memory=False,
         worker_init_fn=init_fn,
-        persistent_workers=(num_workers > 0),
-        **kwargs)
+        **loader_kwargs)
 
     return data_loader
+    # data_loader = DataLoader(
+    #     dataset,
+    #     batch_size=batch_size,
+    #     sampler=sampler,
+    #     num_workers=num_workers,
+    #     collate_fn=partial(collate, samples_per_gpu=samples_per_gpu),
+    #     pin_memory=False,
+    #     worker_init_fn=init_fn,
+    #     persistent_workers=(num_workers > 0),
+    #     **kwargs)
+
+
 
 
 def worker_init_fn(worker_id, num_workers, rank, seed):
