@@ -155,7 +155,6 @@ class BEVFormerDino(BEVFormer):
         vjepa_gate_hidden_dim=256,
         ego_trajectory_head=None,
         motion_head=None,
-        map_seg_head=None,
         *args,
         **kwargs,
     ):
@@ -189,10 +188,6 @@ class BEVFormerDino(BEVFormer):
         self.motion_head = (
             build_from_cfg(motion_head, HEADS)
             if motion_head is not None else None
-        )
-        self.map_seg_head = (
-            build_from_cfg(map_seg_head, HEADS)
-            if map_seg_head is not None else None
         )
 
     def _prepare_cached_features(self, img):
@@ -348,7 +343,6 @@ class BEVFormerDino(BEVFormer):
         gt_future_ego=None,
         gt_fut_traj=None,
         gt_fut_traj_mask=None,
-        gt_masks_bev=None,
         prev_bev=None,
     ):
         outs = self.pts_bbox_head(
@@ -410,41 +404,6 @@ class BEVFormerDino(BEVFormer):
                     )
                 )
 
-        if self.map_seg_head is not None and gt_masks_bev is not None:
-            bev_embed = outs["bev_embed"]
-
-            # BEVFormer can return bev_embed either as:
-            #   [B, H*W, C]
-            # or
-            #   [H*W, B, C]
-            bev_h = self.pts_bbox_head.bev_h
-            bev_w = self.pts_bbox_head.bev_w
-            num_bev_tokens = bev_h * bev_w
-
-            if bev_embed.dim() != 3:
-                raise ValueError(f"Expected bev_embed to be 3D, got {bev_embed.shape}")
-
-            if bev_embed.shape[0] == num_bev_tokens:
-                # [H*W, B, C] -> [B, H*W, C]
-                bev_embed = bev_embed.permute(1, 0, 2).contiguous()
-            elif bev_embed.shape[1] == num_bev_tokens:
-                # already [B, H*W, C]
-                bev_embed = bev_embed.contiguous()
-            else:
-                raise ValueError(
-                    f"Unexpected bev_embed shape {bev_embed.shape}; "
-                    f"expected [B, {num_bev_tokens}, C] or [{num_bev_tokens}, B, C]"
-                )
-
-            B = bev_embed.shape[0]
-            C = bev_embed.shape[2]
-
-            bev_feat = bev_embed.permute(0, 2, 1).contiguous().reshape(
-                B, C, bev_h, bev_w
-            )
-
-            losses.update(self.map_seg_head.forward_train(bev_feat, gt_masks_bev))
-
         return losses
 
     @auto_fp16(apply_to=("img", "points"))
@@ -464,7 +423,6 @@ class BEVFormerDino(BEVFormer):
         gt_future_ego=None,
         gt_fut_traj=None,
         gt_fut_traj_mask=None,
-        gt_masks_bev=None,
     ):
         prev_bev = None
 
@@ -521,7 +479,6 @@ class BEVFormerDino(BEVFormer):
             gt_future_ego=gt_future_ego,
             gt_fut_traj=gt_fut_traj,
             gt_fut_traj_mask=gt_fut_traj_mask,
-            gt_masks_bev=gt_masks_bev,
             prev_bev=prev_bev,
         )
 
@@ -537,7 +494,7 @@ class BEVFormerDino(BEVFormer):
         )
 
         bbox_results = [
-            bbox3d2result(bboxes, scores, labels)
+            bboax3d2result(bboxes, scores, labels)
             for bboxes, scores, labels in bbox_list
         ]
 
