@@ -225,18 +225,6 @@ python -m torch.distributed.launch \
   --launcher pytorch \
   --work-dir work_dirs/<RUN_NAME>
 ```
-
-Example : DINO 448×800 detection model:
-
-```bash
-python -m torch.distributed.launch \
-  --nproc_per_node=4 \
-  tools/train.py \
-  projects/configs/bevformer/bevformer_dino_448x800_bev200_q1_last_adapt4x512_8pts_bs4.py \
-  --launcher pytorch \
-  --work-dir work_dirs/bevformer_dino_448x800
-```
-
 See `scripts/` for cluster/HPC training scripts.
 
 **Evaluation:**
