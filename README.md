@@ -187,9 +187,10 @@ nuscenes_infos_temporal_train_with_map_200_motion.pkl
 nuscenes_infos_temporal_val_with_map_200_motion.pkl
 ```
 
-Then, you can process the nuScenes dataset through the backbone and save the cached features:
-1. Configure the resolution (must be divisible by patch size) and the batch size you want to process at in `scripts/cache_nuscenes_{vjepa,dino}.py`
-2. Submit the caching job to SLURM cluster with `sbatch cache_nuscenes_{vjepa,dino}.sh`
+Then, you can process the nuScenes dataset through the backbone and save the cached features, configure the resolution (must be divisible by patch size) and the batch size you want to process at in `scripts/cache_nuscenes_{vjepa,dino}.py` and run it (on the appropriate compute):
+```bash
+python cached_nuscenes_vjepa.py --split "{train,test}"
+```
 
 This will generate the `XXX.h5` file to use for training.
 
