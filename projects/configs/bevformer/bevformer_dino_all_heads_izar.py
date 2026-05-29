@@ -1,5 +1,4 @@
 # BEVFormerVJepa — all heads
-#
 # Detection    : BEVFormerHead (10-class 3D detection)
 # Ego traj     : EgoTrajectoryHead (6-waypoint ego future, BEV cross-attention)
 # Agent motion : MotionHead (6-waypoint per-agent, DETR query piggyback)
@@ -57,7 +56,7 @@ queue_length = 1
 group_detr = 11
 
 model = dict(
-    type='BEVFormerVJepa',
+    type='BEVFormerV',
     use_grid_mask=False,
     video_test_mode=True,
     pretrained=None,

@@ -51,12 +51,11 @@ _num_levels_ = 1
 bev_h_ = 200
 bev_w_ = 200
 
-# queue_length=1: temporal fusion is handled inside cached V-JEPA slices.
-queue_length = 1
+queue_length = 4
 group_detr = 11
 
 model = dict(
-    type='BEVFormerVJepa',
+    type='BEVFormerDino',
     use_grid_mask=False,
     video_test_mode=True,
     pretrained=None,
@@ -264,7 +263,6 @@ model = dict(
 dataset_type = 'CustomNuScenesDataset'
 data_root = '/mnt/vilab/scratch/masha/nuscenes_trainval/'
 
-# Motion pkl already contains map npz paths (with_map_200_motion).
 train_ann_file = '/mnt/vilab/scratch/masha/nuscenes_trainval/nuscenes_infos_temporal_train_with_map_200_motion.pkl'
 val_ann_file   = '/mnt/vilab/scratch/masha/nuscenes_trainval/nuscenes_infos_temporal_val_with_map_200_motion.pkl'
 
@@ -273,7 +271,7 @@ file_client_args = dict(backend='disk')
 train_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_dino_448x800.h5',
         group='vitb',
         img_w=800,
         img_h=448,
@@ -286,15 +284,11 @@ train_pipeline = [
         with_label_3d=True,
         with_attr_label=False
     ),
-    # Load pre-rasterised HD-map masks from the .npz path stored in the pkl.
-    # npz_root rebases the path prefix stored in the pkl to the actual cluster mount.
     dict(
         type='LoadMapMaskFromNpz',
         classes=map_classes,
         npz_root='/mnt/vilab/scratch/masha/nuscenes_trainval',
     ),
-    # Trajectory-aware filters keep gt_fut_traj / gt_fut_traj_mask in sync
-    # with gt_bboxes_3d through each filter step.
     dict(
         type='ObjectRangeFilterWithTraj',
         point_cloud_range=point_cloud_range
@@ -320,7 +314,7 @@ train_pipeline = [
 test_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_dino_448x800.h5',
         group='vitb',
         img_w=800,
         img_h=448,
@@ -445,12 +439,12 @@ log_config = dict(
         dict(
             type='WandbLoggerHook',
             init_kwargs=dict(
-                project='bevformer-vjepa',
+                project='bevformer-dino',
                 entity='masa-duric-epfl',
-                name='vjepa_all_heads_detection_ego_motion_mapseg_group_detr11',
+                name='dino_all_heads_detection_ego_motion_mapseg_group_detr11',
                 dir='/mnt/vilab/scratch/masha/wandb',
                 config=dict(
-                    model='BEVFormerVJepa',
+                    model='BEVFormerDino',
                     features='V-JEPA cached',
                     temporal_reduce='last',
                     adapter='4 blocks, 512 hidden dim',

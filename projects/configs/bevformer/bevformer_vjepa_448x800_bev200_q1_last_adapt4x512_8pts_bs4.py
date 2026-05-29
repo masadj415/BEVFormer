@@ -1,10 +1,3 @@
-# V-JEPA BEVFormer config
-# BEV = 200 x 200
-# Encoder layers = 6
-# Decoder layers = 6
-# V-JEPA feature level = 1
-# Adapter = 768 -> 512 -> 512 -> 256 with 3x3 convs
-# Temporal fusion = token-wise gated fusion over cached V-JEPA temporal slices
 
 _base_ = [
     '../datasets/custom_nus-3d.py',

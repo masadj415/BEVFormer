@@ -1,11 +1,3 @@
-# V-JEPA BEVFormer config
-# BEV = 200 x 200
-# Encoder layers = 6
-# Decoder layers = 6
-# V-JEPA feature level = 1
-# Adapter = 768 -> 512 -> 512 -> 256 with 3x3 convs
-# Temporal fusion = token-wise gated fusion over cached V-JEPA temporal slices
-
 _base_ = [
     '../datasets/custom_nus-3d.py',
     '../_base_/default_runtime.py'
@@ -49,24 +41,53 @@ bev_w_ = 200
 
 # Keep queue_length = 1 because temporal fusion is inside cached V-JEPA slices.
 # The current BEVFormerVJepa forward_train does not use prev_bev.
-queue_length = 1
+queue_length = 4
 
 model = dict(
     type='BEVFormerVJepa',
     use_grid_mask=False,
-    video_test_mode=False,
+    video_test_mode=True,
     pretrained=None,
 
     # V-JEPA cached feature settings.
     vjepa_in_dim=768,
     vjepa_out_dim=_dim_,
-    vjepa_h=14,
-    vjepa_w=24,
+    vjepa_h=28,
+    vjepa_w=50,
 
     # New temporal fusion.
-    vjepa_temporal_reduce='gated',
+    vjepa_temporal_reduce='last',
+    vjepa_adapter_num_blocks=4,
     vjepa_adapter_hidden_dim=512,
     vjepa_gate_hidden_dim=256,
+
+    # Track 1: Ego trajectory head.
+    # Predicts 6 future ego waypoints (3 s at 0.5 s/step) in current ego frame.
+    # Initialized from canbus (speed/yaw prior) + 2-layer BEV cross-attention.
+    # Start weight at 0.1; ramp toward 0.5 after ~10 k iters if loss is stable.
+    ego_trajectory_head=dict(
+        type='EgoTrajectoryHead',
+        embed_dims=_dim_,
+        num_waypoints=6,
+        canbus_dim=18,
+        num_decoder_layers=2,
+        num_heads=8,
+        dropout=0.1,
+        loss_weight=0.5,
+    ),
+
+    # Track 2: Per-agent motion head.
+    # Piggybacks on the 900 DETR detection queries (no new queries).
+    # GT is real future positions from the motion pkl (not velocity extrapolation).
+    # Only moving agents (|v| > 0.5 m/s) contribute to the loss to avoid the
+    # stationary-agent majority trivially driving the loss to zero.
+    motion_head=dict(
+        type='MotionHead',
+        embed_dims=_dim_,
+        num_waypoints=6,
+        future_dt=0.5,
+        loss_weight=0.25,
+    ),
 
     img_backbone=None,
     img_neck=None,
@@ -209,15 +230,17 @@ model = dict(
 
 dataset_type = 'CustomNuScenesDataset'
 data_root = '/mnt/vilab/scratch/masha/nuscenes_trainval/'
+motion_ann_file = '/mnt/vilab/scratch/masha/nuscenes_trainval/nuscenes_infos_temporal_train_with_map_200_motion.pkl'
+val_ann_file = '/mnt/vilab/scratch/masha/nuscenes_trainval/nuscenes_infos_temporal_val_with_map_200_motion.pkl'
 file_client_args = dict(backend='disk')
 
 train_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/features_vitb_224x384_T4_final.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
         group='vitb',
-        img_w=384,
-        img_h=224,
+        img_w=800,
+        img_h=448,
         orig_w=1600,
         orig_h=900
     ),
@@ -227,12 +250,14 @@ train_pipeline = [
         with_label_3d=True,
         with_attr_label=False
     ),
+    # Trajectory-aware versions keep gt_fut_traj / gt_fut_traj_mask in sync
+    # with gt_bboxes_3d through each filter step.
     dict(
-        type='ObjectRangeFilter',
+        type='ObjectRangeFilterWithTraj',
         point_cloud_range=point_cloud_range
     ),
     dict(
-        type='ObjectNameFilter',
+        type='ObjectNameFilterWithTraj',
         classes=class_names
     ),
     dict(
@@ -241,23 +266,24 @@ train_pipeline = [
     ),
     dict(
         type='CustomCollect3D',
-        keys=['gt_bboxes_3d', 'gt_labels_3d', 'img']
+        keys=['gt_bboxes_3d', 'gt_labels_3d', 'img',
+              'gt_future_ego', 'gt_fut_traj', 'gt_fut_traj_mask']
     )
 ]
 
 test_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/features_vitb_224x384_T4_final.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
         group='vitb',
-        img_w=384,
-        img_h=224,
+        img_w=800,
+        img_h=448,
         orig_w=1600,
         orig_h=900
     ),
     dict(
         type='MultiScaleFlipAug3D',
-        img_scale=(384, 224),
+        img_scale=(800, 448),
         pts_scale_ratio=1,
         flip=False,
         transforms=[
@@ -275,13 +301,13 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=8,
-    workers_per_gpu=0,
+    samples_per_gpu=4,
+    workers_per_gpu=2,
 
     train=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_infos_temporal_train.pkl',
+        ann_file=motion_ann_file,
         pipeline=train_pipeline,
         classes=class_names,
         modality=input_modality,
@@ -295,7 +321,7 @@ data = dict(
     val=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
+        ann_file=val_ann_file,
         pipeline=test_pipeline,
         bev_size=(bev_h_, bev_w_),
         classes=class_names,
@@ -306,7 +332,7 @@ data = dict(
     test=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
+        ann_file=val_ann_file,
         pipeline=test_pipeline,
         bev_size=(bev_h_, bev_w_),
         classes=class_names,
@@ -347,7 +373,9 @@ runner = dict(
 evaluation = dict(
     interval=3,
     metric='bbox',
-    pipeline=test_pipeline
+    pipeline=test_pipeline,
+    save_best='pts_bbox_NuScenes/NDS',
+    rule='greater'
 )
 
 
@@ -356,20 +384,19 @@ log_config = dict(
     hooks=[
         dict(type='TextLoggerHook'),
         dict(
-            type='FilteredWandbLoggerHook',
-            keep_train=True,
+            type='WandbLoggerHook',
             init_kwargs=dict(
                 project='bevformer-vjepa',
-                name='vjepa_bev200_enc6_gated_adapter512_bs12_w0',
+                name='vjepa_bev_448x800_temporal_new_heads',
                 dir='/mnt/vilab/scratch/masha/wandb',
                 config=dict(
                     model='BEVFormerVJepa',
                     features='V-JEPA cached',
-                    temporal_reduce='gated',
-                    adapter='768-512-512-256 conv3x3',
+                    temporal_reduce='last',
+                    adapter='4 blocks, 512 hidden dim',
                     gate_hidden_dim=256,
-                    samples_per_gpu=8,
-                    workers_per_gpu=0,
+                    samples_per_gpu=4,
+                    workers_per_gpu=2,
                     queue_length=queue_length,
                     bev_h=bev_h_,
                     bev_w=bev_w_,

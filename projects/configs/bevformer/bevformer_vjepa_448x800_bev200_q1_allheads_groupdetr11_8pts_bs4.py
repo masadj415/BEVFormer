@@ -1,16 +1,7 @@
-# V-JEPA BEVFormer config
-# BEV = 200 x 200
-# Encoder layers = 6
-# Decoder layers = 6
-# V-JEPA feature level = 1
-# Adapter = 768 -> 512 -> 512 -> 256 with 3x3 convs
-# Temporal fusion = token-wise gated fusion over cached V-JEPA temporal slices
-
 _base_ = [
     '../datasets/custom_nus-3d.py',
     '../_base_/default_runtime.py'
 ]
-
 plugin = True
 plugin_dir = 'projects/mmdet3d_plugin/'
 
@@ -28,52 +19,101 @@ class_names = [
     'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone'
 ]
 
+map_classes = [
+    'drivable_area', 'ped_crossing', 'walkway',
+    'stop_line', 'carpark_area', 'divider',
+]
+
 input_modality = dict(
     use_lidar=False,
     use_camera=True,
     use_radar=False,
-    use_map=False,
+    use_map=True,
     use_external=True
 )
 
 _dim_ = 256
 _pos_dim_ = _dim_ // 2
 _ffn_dim_ = _dim_ * 2
-
-# V-JEPA gives one feature map level only.
 _num_levels_ = 1
 
-# BEVFormer-base-like BEV resolution.
 bev_h_ = 200
 bev_w_ = 200
 
-# Keep queue_length = 1 because temporal fusion is inside cached V-JEPA slices.
-# The current BEVFormerVJepa forward_train does not use prev_bev.
 queue_length = 1
+group_detr = 11
 
 model = dict(
-    type='BEVFormerDino',
+    type='BEVFormerVJepa',
     use_grid_mask=False,
     video_test_mode=True,
     pretrained=None,
 
-    # V-JEPA cached feature settings.
+    # V-JEPA cached feature settings (4x448x800 → 28x50 token grid).
     vjepa_in_dim=768,
     vjepa_out_dim=_dim_,
     vjepa_h=28,
     vjepa_w=50,
-
-    # New temporal fusion.
     vjepa_temporal_reduce='last',
     vjepa_adapter_num_blocks=4,
     vjepa_adapter_hidden_dim=512,
     vjepa_gate_hidden_dim=256,
 
+    # Track 1: Ego trajectory head.
+    # 6 future waypoints (3 s at 0.5 s/step) in current ego frame.
+    # loss_weight is the floor; AuxLossWarmupHook ramps it to ego_target.
+    ego_trajectory_head=dict(
+        type='EgoTrajectoryHead',
+        embed_dims=_dim_,
+        num_waypoints=6,
+        canbus_dim=18,
+        num_decoder_layers=2,
+        num_heads=8,
+        dropout=0.1,
+        loss_weight=0.02,
+    ),
+
+    # Track 2: Per-agent motion head.
+    # Piggybacks on 900 DETR queries; loss only on Hungarian-matched movers.
+    # loss_weight is the floor; AuxLossWarmupHook ramps it to motion_target.
+    motion_head=dict(
+        type='MotionHead',
+        embed_dims=_dim_,
+        num_waypoints=6,
+        future_dt=0.5,
+        loss_weight=0.02,
+    ),
+
+    # Track 3: Map segmentation head.
+    # 6-class binary BEV segmentation (sigmoid focal loss, no softmax).
+    # Per-class alpha tuned for nuScenes map class frequency imbalance.
+    # loss_weight=10.0 compensates for small per-pixel magnitude vs detection.
+    map_seg_head=dict(
+        type='MapSegHead',
+        in_channels=_dim_,
+        num_classes=len(map_classes),
+        loss_seg=dict(
+            type='FocalLoss',
+            use_sigmoid=True,
+            gamma=2.0,
+            alpha=[
+                0.50,   # drivable_area  — common
+                0.75,   # ped_crossing   — rare
+                0.65,   # walkway        — moderate
+                0.90,   # stop_line      — very rare, thin lines
+                0.65,   # carpark_area   — moderate
+                0.90,   # divider        — very rare, thin lines
+            ],
+            loss_weight=10.0,
+        ),
+    ),
+
     img_backbone=None,
     img_neck=None,
 
     pts_bbox_head=dict(
-        type='BEVFormerHead',
+        type='BEVFormerHead_GroupDETR',
+        group_detr=group_detr,
         bev_h=bev_h_,
         bev_w=bev_w_,
         num_query=900,
@@ -135,7 +175,8 @@ model = dict(
                     type='DetrTransformerDecoderLayer',
                     attn_cfgs=[
                         dict(
-                            type='MultiheadAttention',
+                            type='GroupMultiheadAttention',
+                            group=group_detr,
                             embed_dims=_dim_,
                             num_heads=8,
                             dropout=0.1
@@ -210,12 +251,16 @@ model = dict(
 
 dataset_type = 'CustomNuScenesDataset'
 data_root = '/mnt/vilab/scratch/masha/nuscenes_trainval/'
+
+train_ann_file = '/mnt/vilab/scratch/masha/nuscenes_trainval/nuscenes_infos_temporal_train_with_map_200_motion.pkl'
+val_ann_file   = '/mnt/vilab/scratch/masha/nuscenes_trainval/nuscenes_infos_temporal_val_with_map_200_motion.pkl'
+
 file_client_args = dict(backend='disk')
 
 train_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_dino_448x800.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
         group='vitb',
         img_w=800,
         img_h=448,
@@ -228,12 +273,21 @@ train_pipeline = [
         with_label_3d=True,
         with_attr_label=False
     ),
+    # Load pre-rasterised HD-map masks from the .npz path stored in the pkl.
+    # npz_root rebases the path prefix stored in the pkl to the actual cluster mount.
     dict(
-        type='ObjectRangeFilter',
+        type='LoadMapMaskFromNpz',
+        classes=map_classes,
+        npz_root='/mnt/vilab/scratch/masha/nuscenes_trainval',
+    ),
+    # Trajectory-aware filters keep gt_fut_traj / gt_fut_traj_mask in sync
+    # with gt_bboxes_3d through each filter step.
+    dict(
+        type='ObjectRangeFilterWithTraj',
         point_cloud_range=point_cloud_range
     ),
     dict(
-        type='ObjectNameFilter',
+        type='ObjectNameFilterWithTraj',
         classes=class_names
     ),
     dict(
@@ -242,14 +296,18 @@ train_pipeline = [
     ),
     dict(
         type='CustomCollect3D',
-        keys=['gt_bboxes_3d', 'gt_labels_3d', 'img']
+        keys=[
+            'gt_bboxes_3d', 'gt_labels_3d', 'img',
+            'gt_future_ego', 'gt_fut_traj', 'gt_fut_traj_mask',
+            'gt_masks_bev',
+        ]
     )
 ]
 
 test_pipeline = [
     dict(
         type='LoadVJepaFeaturesFromH5',
-        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_dino_448x800.h5',
+        h5_path='/mnt/vilab/scratch/masha/vjepa_cache/train_feat_vitb_4x448x800.h5',
         group='vitb',
         img_w=800,
         img_h=448,
@@ -282,7 +340,7 @@ data = dict(
     train=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_infos_temporal_train.pkl',
+        ann_file=train_ann_file,
         pipeline=train_pipeline,
         classes=class_names,
         modality=input_modality,
@@ -296,7 +354,7 @@ data = dict(
     val=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
+        ann_file=val_ann_file,
         pipeline=test_pipeline,
         bev_size=(bev_h_, bev_w_),
         classes=class_names,
@@ -307,7 +365,7 @@ data = dict(
     test=dict(
         type=dataset_type,
         data_root=data_root,
-        ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
+        ann_file=val_ann_file,
         pipeline=test_pipeline,
         bev_size=(bev_h_, bev_w_),
         classes=class_names,
@@ -340,19 +398,32 @@ lr_config = dict(
 
 total_epochs = 30
 
+# Gradually ramp ego/motion loss weights from 0.02 → target over epoch 9-12.
+# The map_seg_head loss_weight is fixed at 10.0 (not ramped — pixel-level
+# focal loss is naturally small and doesn't destabilise detection early on).
+custom_hooks = [
+    dict(
+        type='AuxLossWarmupHook',
+        start_epoch=9,
+        end_epoch=12,
+        ego_target=0.5,
+        motion_target=0.25,
+        min_weight=0.02,
+    )
+]
+
 runner = dict(
     type='EpochBasedRunner',
     max_epochs=total_epochs
 )
 
 evaluation = dict(
-    interval=3,
+    interval=25,
     metric='bbox',
     pipeline=test_pipeline,
     save_best='pts_bbox_NuScenes/NDS',
     rule='greater'
 )
-
 
 log_config = dict(
     interval=10,
@@ -362,14 +433,16 @@ log_config = dict(
             type='WandbLoggerHook',
             init_kwargs=dict(
                 project='bevformer-vjepa',
-                name='dino_448_800_best_settings',
+                entity='masa-duric-epfl',
+                name='vjepa_all_heads_detection_ego_motion_mapseg_group_detr11',
                 dir='/mnt/vilab/scratch/masha/wandb',
                 config=dict(
-                    model='BEVFormerDino',
-                    features='Dino cached',
+                    model='BEVFormerVJepa',
+                    features='V-JEPA cached',
                     temporal_reduce='last',
                     adapter='4 blocks, 512 hidden dim',
-                    gate_hidden_dim=256,
+                    heads=['detection', 'ego_trajectory', 'motion', 'map_seg'],
+                    map_classes=map_classes,
                     samples_per_gpu=4,
                     workers_per_gpu=2,
                     queue_length=queue_length,
@@ -377,13 +450,11 @@ log_config = dict(
                     bev_w=bev_w_,
                     encoder_layers=6,
                     decoder_layers=6,
-                    num_levels=_num_levels_
+                    num_levels=_num_levels_,
                 )
             )
         )
     ]
 )
 
-checkpoint_config = dict(
-    interval=1
-)
+checkpoint_config = dict(interval=1)
