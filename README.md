@@ -22,7 +22,7 @@ The project adds lightweight token-to-BEVFormer adapters and extends the detecto
 
 ---
 
-<p align="center">
+<!-- <p align="center">
   <a href="assets/dino_scene481_thr035_10s.mp4">
     <img src="assets/dino_scene481_thr035_preview.gif" width="720">
   </a>
@@ -34,7 +34,7 @@ The project adds lightweight token-to-BEVFormer adapters and extends the detecto
   </a>
   <br>
   <em>V-JEPA-BEV predictions on the same scene</em>
-</p>
+</p> -->
 
 <!-- ---
 
