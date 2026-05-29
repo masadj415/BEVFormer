@@ -19,14 +19,16 @@ The project compares cached **V-JEPA** and **DINO** features, adds lightweight t
   <br>
   <em>V-JEPA cached-feature predictions on nuScenes scene</em>
 </p>
+
 ## Project overview
+
 Standard BEVFormer uses RGB images as input:
 
 ```text
 multi-camera images -> CNN/FPN backbone -> BEVFormer encoder/decoder -> 3D boxes
 ```
 
-This project replaces the expensive image backbone with cached token features:
+This project replaces the ResNet backbone with cached token features:
 
 ```text
 cached V-JEPA / DINO HDF5 features
@@ -74,7 +76,7 @@ The repository includes short qualitative visualizations under `assets/`. GitHub
 │   ├── dist_train.sh
 │   ├── dist_test.sh
 │   └── analysis_tools/                 # visualization and analysis utilities
-├── scripts/                            # cluster/HPC training and evaluation scripts
+├── scripts/                            # cluster/HPC training and evaluation scripts; backbone feature caching script
 ├── assets/                             # qualitative figures and video demos
 ```
 
@@ -184,6 +186,12 @@ For multi-task experiments with map and motion targets, the configs use augmente
 nuscenes_infos_temporal_train_with_map_200_motion.pkl
 nuscenes_infos_temporal_val_with_map_200_motion.pkl
 ```
+
+Then, you can process the nuScenes dataset through the backbone and save the cached features:
+1. Configure the resolution (must be divisible by patch size) and the batch size you want to process at in `scripts/cache_nuscenes_{vjepa,dino}.py`
+2. Submit the caching job to SLURM cluster with `sbatch cache_nuscenes_{vjepa,dino}.sh`
+
+This will generate the `XXX.h5` file to use for training.
 
 ## Training
 
