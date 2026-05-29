@@ -1,15 +1,18 @@
 # BEVFormer with Cached V-JEPA and DINO Features
 
 <p align="center">
-  <video width="45%" controls>
-    <source src="../../Images/vjepa.mp4" type="video/mp4">
+  <video width="720" controls>
+    <source src="assets/vjepa.mp4" type="video/mp4">
   </video>
-  &nbsp;
-  <video width="45%" controls>
-    <source src="../../Images/dino.mp4" type="video/mp4">
+  <br>
+  <em>V-JEPA 2.1</em>
+  <br><br>
+  <video width="720" controls>
+    <source src="assets/dino.mp4" type="video/mp4">
   </video>
+  <br>
+  <em>DINOv3</em>
 </p>
-<p align="center"><em>Left: V-JEPA 2.1 &nbsp;|&nbsp; Right: DINOv3</em></p>
 
 ---
 
@@ -21,17 +24,19 @@ The project adds lightweight token-to-BEVFormer adapters and extends the detecto
 
 <p align="center">
   <a href="assets/dino_scene481_thr035_10s.mp4">
-    <img src="assets/dino_scene481_thr035_preview.gif" width="45%">
-  </a>
-  &nbsp;
-  <a href="assets/vjepa_scene481_thr035_10s.mp4">
-    <img src="assets/vjepa_scene481_thr035_preview.gif" width="45%">
+    <img src="assets/dino_scene481_thr035_preview.gif" width="720">
   </a>
   <br>
-  <em>Left: DINOv3-BEV predictions &nbsp;|&nbsp; Right: V-JEPA-BEV predictions on a nuScenes validation scene</em>
+  <em>DINOv3-BEV predictions on a nuScenes validation scene</em>
+  <br><br>
+  <a href="assets/vjepa_scene481_thr035_10s.mp4">
+    <img src="assets/vjepa_scene481_thr035_preview.gif" width="720">
+  </a>
+  <br>
+  <em>V-JEPA-BEV predictions on the same scene</em>
 </p>
 
----
+<!-- ---
 
 ## Project overview
 
@@ -54,7 +59,7 @@ cached V-JEPA / DINO HDF5 features
 
 The cached-feature setup makes it possible to test different frozen representation backbones without repeatedly recomputing dense features during BEVFormer training.
 
----
+--- -->
 
 ## Pipeline
 
@@ -79,38 +84,6 @@ cached V-JEPA / DINOv3 HDF5 features
 ```
 
 The cached-feature setup lets us iterate on adapter and BEV-transformer design without re-running the backbone, and it is the primary source of the 2.3× inference speedup over BEVFormer R101-DCN.
-
----
-
-## Qualitative Results
-
-<p align="center">
-  <a href="assets/dino_scene481_thr035_10s.mp4">
-    <img src="assets/dino_scene481_thr035_preview.gif" width="720">
-  </a>
-  <br>
-  <em>DINOv3-BEV predictions on a nuScenes validation scene (click for full video)</em>
-</p>
-
-<p align="center">
-  <a href="assets/vjepa_scene481_thr035_10s.mp4">
-    <img src="assets/vjepa_scene481_thr035_preview.gif" width="720">
-  </a>
-  <br>
-  <em>V-JEPA-BEV predictions on the same scene (click for full video)</em>
-</p>
-
-### BEV map comparisons
-
-| DINOv3-BEV | BEVFormer reference |
-|:-----------:|:-------------------:|
-| ![DINOv3 BEV map](assets/bevmap_dino_compare.png) | ![BEVFormer BEV map](assets/bevmap_bevformer_dino_compare.png) |
-
-| V-JEPA-BEV | BEVFormer reference |
-|:-----------:|:-------------------:|
-| ![V-JEPA BEV map](assets/bevmap_vjepa_compare.jpeg) | ![BEVFormer BEV map](assets/bevmap_bevformer_vjepa_compare.jpeg) |
-
----
 
 ## Repository structure
 
@@ -280,32 +253,6 @@ python -m torch.distributed.launch \
 
 Primary metrics: NDS, mAP, mATE, mASE, mAOE, mAVE, mAAE. If ego or motion heads are enabled, also reports `ego/ADE`, `ego/FDE`, `motion/ADE`, `motion/FDE`.
 
-## Main experiment configurations
-
-| Config | Description |
-|---|---|
-| `bevformer_dino_448x800_bev200_q1_last_adapt4x512_8pts_bs4.py` | DINOv3 features, 448×800, detection |
-| `bevformer_dino_448x800_bev200_q4_allheads_groupdetr11_8pts_bs4.py` | DINOv3 with all heads + Group-DETR queries |
-| `bevformer_vjepa_448x800_bev200_q1_last_adapt4x512_8pts_bs4.py` | V-JEPA, last-slice, 448×800 |
-| `bevformer_vjepa_448x800_bev200_q1_last_adapt6x512_8pts_bs4.py` | V-JEPA with deeper adapter |
-| `bevformer_vjepa_224x384_bev200_q1_gated_adapter512_8pts_bs8.py` | V-JEPA, 224×384, gated temporal fusion |
-| `bevformer_vjepa_448x800_bev200_q4_last_adapt4x512_motion_ego_8pts_bs4.py` | V-JEPA + detection + ego + motion |
-
-
-## Validation results
-
-The table below summarizes the best completed validation runs from the provided experiment summary. Metrics are nuScenes validation metrics.
-
-| Run | Encoder | Resolution | Token grid | Temporal setup | NDS | mAP | mATE | mAOE |
-|---|---|---:|---:|---|---:|---:|---:|---:|
-| `bevformer_dino_lets_try_448_800` | DINO | 448 x 800 | 28 x 50 | queue 4, last | **0.4664** | **0.3535** | 0.7215 | 0.4448 |
-| `bevformer_dino_lets_try_896x1600` | DINO | 896 x 1600 | 56 x 100 | queue 4, last | 0.4563 | 0.3522 | 0.7596 | 0.4766 |
-| `bevformer_vjepa_new_temporal_4_izar_good_one` | V-JEPA | 448 x 800 | 28 x 50 | queue 4, last | 0.4311 | 0.3141 | 0.7725 | 0.5541 |
-| `bevformer_vjepa_gated_3gpu_a100_80_bs12_w0_fix1_new_cache_good_cameras_HIGH` | V-JEPA | 448 x 800 | 28 x 50 | gated | 0.3633 | 0.2527 | 0.8193 | 0.6313 |
-| `bevformer_vjepa_gated_3gpu_a100_80_bs12_w0_fix1_new_cache_good_cameras` | V-JEPA | 368 x 656 | 23 x 41 | gated | 0.3475 | 0.2300 | 0.8714 | 0.6701 |
-| `bevformer_vjepa_new_adapter_6blocks_3gpu_a100_80_bs12_w0_fix1_high` | V-JEPA | 448 x 800 | 28 x 50 | last | 0.3414 | 0.2456 | 0.8847 | 0.6524 |
-
-The strongest result in these experiments is the DINO 448 x 800 model. The strongest V-JEPA detection result uses 448 x 800 cached features with a queue length of 4 and last-slice temporal reduction.
 
 ## Citation
 
