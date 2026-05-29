@@ -4,8 +4,22 @@ This repository is a project fork of **BEVFormer** for camera-only 3D perception
 
 The project compares cached **V-JEPA** and **DINO** features, adds lightweight token-to-BEVFormer adapters, and extends the detector with optional multi-task heads for 3D detection, ego trajectory prediction, agent motion prediction, and HD-map segmentation.
 
-## Project overview
+<p align="center">
+  <a href="assets/dino_scene481_thr035_10s.mp4">
+    <img src="assets/dino_scene481_thr035_preview.gif" width="750">
+  </a>
+  <br>
+  <em>DINO cached-feature predictions on nuScenes scene</em>
+</p>
 
+<p align="center">
+  <a href="assets/vjepa-bev.mp4">
+    <img src="assets/vjepa_scene481_thr035_preview.gif" width="750">
+  </a>
+  <br>
+  <em>V-JEPA cached-feature predictions on nuScenes scene</em>
+</p>
+## Project overview
 Standard BEVFormer uses RGB images as input:
 
 ```text
