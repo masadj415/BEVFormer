@@ -1,17 +1,17 @@
 # BEVFormer with Cached V-JEPA and DINO Features
 
 <p align="center">
-  <video width="720" controls>
-    <source src="assets/vjepa.mp4" type="video/mp4">
-  </video>
+  <a href="assets/vjepa-bev.mp4">
+    <img src="assets/vjepa_scene481_thr035_preview.gif" width="720">
+  </a>
   <br>
-  <em>V-JEPA 2.1</em>
+  <em>V-JEPA 2.1 (click for video)</em>
   <br><br>
-  <video width="720" controls>
-    <source src="assets/dino.mp4" type="video/mp4">
-  </video>
+  <a href="assets/dino_scene481_thr035_10s.mp4">
+    <img src="assets/dino_scene481_thr035_preview.gif" width="720">
+  </a>
   <br>
-  <em>DINOv3</em>
+  <em>DINOv3 (click for video)</em>
 </p>
 
 ---
@@ -29,7 +29,7 @@ The project adds lightweight token-to-BEVFormer adapters and extends the detecto
   <br>
   <em>DINOv3-BEV predictions on a nuScenes validation scene</em>
   <br><br>
-  <a href="assets/vjepa_scene481_thr035_10s.mp4">
+  <a href="assets/vjepa-bev.mp4">
     <img src="assets/vjepa_scene481_thr035_preview.gif" width="720">
   </a>
   <br>
