@@ -20,6 +20,8 @@ This repository is a project fork of **BEVFormer** for camera-only 3D perception
 
 The project adds lightweight token-to-BEVFormer adapters and extends the detector with optional multi-task heads for 3D detection, ego trajectory prediction, agent motion prediction, and HD-map segmentation. The cached-feature setup makes it possible to test different frozen backbone representations without repeatedly recomputing dense features during BEVFormer training.
 
+Link to the folder can be found: https://phantuanlink.github.io/cs503-project-webpage-template.
+
 ---
 
 <!-- <p align="center">
